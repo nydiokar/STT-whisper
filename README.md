@@ -10,6 +10,16 @@ A system-wide voice-to-text service that uses OpenAI's Whisper model for accurat
 - Uses Windows+G shortcut
 - Higher accuracy than Windows speech recognition
 
+## Documentation
+
+Detailed documentation is available in the `docs` directory:
+
+- [Documentation Index](docs/index.md) - Start here for an overview
+- [Architecture](docs/architecture/README.md) - System design and components
+- [User Guide](docs/user_guide/README.md) - Installation and usage instructions
+- [Development Guide](docs/development/README.md) - For contributors and developers
+- [API Documentation](docs/api/README.md) - Technical API details
+
 ## How It Works
 
 1. Capture audio using your default microphone
@@ -30,7 +40,7 @@ A system-wide voice-to-text service that uses OpenAI's Whisper model for accurat
    - Test it in Windows Sound settings
    - Close any applications that might be using it
 
-## Installation
+## Quick Start
 
 1. Create a virtual environment:
 ```bash
@@ -43,34 +53,34 @@ python -m venv .venv
 pip install -e ".[dev]"
 ```
 
-3. Install Whisper and download the model:
-```bash
-# First, install Whisper
-pip install openai-whisper
-
-# Then download the model (this may take a few minutes)
-python -c "import whisper; whisper.load_model('base')"
-```
-
-Note: The first time you run the service, Whisper will automatically download the specified model if it hasn't been downloaded yet. Models are stored in:
-- Windows: %USERPROFILE%\.cache\whisper
-- The "base" model is around 142MB
-
-## Usage
-
-1. Start the service:
+3. Start the service:
 ```bash
 python -m voice_input_service
 ```
 
-2. In any text input field:
-   - Press Windows+G to start recording (different from Windows+H to avoid conflicts with built-in STT)
+4. In any text input field:
+   - Press Alt+R to start recording
    - Speak into your microphone
-   - Press Windows+G again or Esc to stop recording
+   - Press Alt+R again to stop recording
    - The transcribed text will be automatically inserted at your cursor position
 
-Note: This service uses Windows+G to avoid conflicts with the Windows built-in speech-to-text (Windows+H).
-You can use either service independently without interference.
+For detailed installation and usage instructions, see the [User Guide](docs/user_guide/README.md).
+
+## Tips for Best Results
+
+1. Use a good quality microphone
+2. Speak clearly and at a normal pace
+3. Minimize background noise
+4. Keep the microphone at a consistent distance
+5. Consider using a larger Whisper model if accuracy is critical
+
+## Contributing
+
+Contributions are welcome! Please see the [Development Guide](docs/development/README.md) for information on how to contribute to this project.
+
+## License
+
+This project is licensed under the MIT License - see the LICENSE file for details.
 
 ## Configuration
 
@@ -89,14 +99,6 @@ Audio settings are fixed for optimal Whisper compatibility:
 - Microphone
 - OpenAI Whisper model (downloaded automatically)
 - Windows OS (for system-wide keyboard shortcuts)
-
-## Tips for Best Results
-
-1. Use a good quality microphone
-2. Speak clearly and at a normal pace
-3. Minimize background noise
-4. Keep the microphone at a consistent distance
-5. Consider using a larger Whisper model if accuracy is critical
 
 ## Troubleshooting
 
