@@ -5,6 +5,10 @@ import os
 from typing import Optional
 import pyperclip
 import logging
+import whisper
+import tkinter as tk
+from tkinter import filedialog, messagebox
+import numpy as np
 
 # Import core components
 from voice_input_service.core.audio import AudioRecorder
@@ -13,21 +17,36 @@ from voice_input_service.core.processing import TranscriptionWorker
 from voice_input_service.utils.file_ops import TranscriptManager
 from voice_input_service.utils.logging import setup_logging
 from voice_input_service.ui.window import TranscriptionUI
+from voice_input_service.ui.dialogs import ModelSelectionDialog, DownloadProgressDialog
 from voice_input_service.ui.events import KeyboardEventManager, EventHandler
 from voice_input_service.core.config import Config
 
 class VoiceInputService(EventHandler):
     """Main service for voice transcription."""
     
-    def __init__(self) -> None:
-        # Setup logging
-        self.logger = setup_logging()
-        self.logger.info("Starting Voice Input Service")
+    def __init__(
+        self, 
+        config: Config, 
+        ui: TranscriptionUI, 
+        transcriber: TranscriptionEngine
+    ) -> None:
+        """Initialize the voice input service.
         
-        # Load configuration
-        self.config = Config.load()
+        Args:
+            config: Application configuration
+            ui: User interface component
+            transcriber: Transcription engine
+        """
+        # Get logger (should be already set up)
+        self.logger = logging.getLogger("VoiceService")
+        self.logger.info("Initializing Voice Input Service")
         
-        # Initialize core components
+        # Store initialized components
+        self.config = config
+        self.ui = ui
+        self.transcriber = transcriber
+        
+        # Initialize additional components
         self.recorder = AudioRecorder(
             sample_rate=self.config.audio.sample_rate,
             channels=self.config.audio.channels,
@@ -36,17 +55,7 @@ class VoiceInputService(EventHandler):
             on_data_callback=self._on_audio_data
         )
         
-        self.transcriber = TranscriptionEngine(
-            model_name=self.config.transcription.model_name,
-            device=self.config.transcription.device,
-            compute_type=self.config.transcription.compute_type,
-            language=self.config.transcription.language
-        )
-        
         self.transcript_manager = TranscriptManager()
-        
-        # Initialize UI
-        self.ui = TranscriptionUI()
         
         # State variables
         self.recording = False
@@ -119,18 +128,15 @@ class VoiceInputService(EventHandler):
     
     def _process_audio_chunk(self, audio_data: bytes) -> Optional[str]:
         """Process an audio chunk and return transcription result."""
-        if not audio_data or len(audio_data) < 4000:  # Minimum audio length
+        # Use a larger minimum chunk size for better accuracy
+        min_chunk_size = self.config.transcription.min_chunk_size  # Default 32000 bytes (about 1 second)
+        
+        if not audio_data or len(audio_data) < min_chunk_size:
             return None
         
         try:
-            # Get current language setting
-            language = self.ui.language_var.get()
-            
-            # Transcribe the audio data
-            result = self.transcriber.transcribe(
-                audio_data=audio_data,
-                language=language
-            )
+            # Transcribe the audio data directly
+            result = self.transcriber.transcribe(audio=audio_data)
             
             # Return the transcribed text
             return result.get("text", "").strip()
@@ -150,6 +156,12 @@ class VoiceInputService(EventHandler):
         self.recording = True
         self.recording_start_time = time.time()
         self.audio_buffer = bytearray()
+        
+        # Clear accumulated text in non-continuous mode
+        if not self.continuous_mode:
+            self.accumulated_text = ""
+            self.ui.update_text("")
+            self.ui.update_word_count(0)
         
         # Visual indication of recording
         self.ui.update_status_color("recording")
@@ -178,81 +190,110 @@ class VoiceInputService(EventHandler):
         
         self.logger.info("Stopping recording")
         
-        # Stop recording
-        audio_data = self.recorder.stop()
-        
-        # Update state
+        # Stop recording flag first
         self.recording = False
+        
+        # Stop audio recorder and get final data
+        audio_data = self.recorder.stop()
         
         # Visual indication that recording has stopped
         self.ui.update_status_color("processing")
         self.ui.update_status(False)
         
-        # Process any remaining audio buffer
-        if len(self.audio_buffer) > 8000:  # At least ~0.1s of audio
-            self.logger.info(f"Processing final audio chunk ({len(self.audio_buffer)/1024:.1f} KB)")
-            self._process_audio_chunk(bytes(self.audio_buffer))
-        else:
-            self.logger.warning("No audio data to transcribe")
-            self.ui.update_status_color("ready")
+        # Process any remaining audio buffer if significant
+        if len(audio_data) > 8000:  # At least ~0.1s of audio
+            self.logger.info(f"Processing final audio chunk ({len(audio_data)/1024:.1f} KB)")
+            self._process_audio_chunk(audio_data)
         
-        # Stop the worker
+        # Stop the worker after processing final chunk
         self.worker.stop()
+        
+        # Reset state
+        self.audio_buffer = bytearray()
+        
+        # Update UI to ready state
+        self.ui.update_status_color("ready")
         
         return self.accumulated_text
     
+    def _filter_hallucinations(self, text: str) -> str:
+        """Filter out common hallucinated phrases from Whisper."""
+        # Common YouTube-style endings that Whisper tends to hallucinate
+        hallucination_patterns = [
+            "thanks for watching",
+            "thank you for watching",
+            "don't forget to subscribe",
+            "like and subscribe",
+            "see you in the next video",
+            "thanks for listening",
+        ]
+        
+        # Convert to lower case for comparison
+        text_lower = text.lower()
+        
+        # Check if the text is mostly or entirely composed of hallucinated content
+        for pattern in hallucination_patterns:
+            if pattern in text_lower:
+                # If the text is mostly the hallucinated pattern (allowing for some extra words)
+                if len(text.split()) <= len(pattern.split()) + 2:
+                    self.logger.debug(f"Filtered hallucinated phrase: {text}")
+                    return ""
+        
+        return text
+
     def _on_transcription_result(self, text: str) -> None:
         """Handle transcription result."""
         if not text:
             return
             
-        # Skip duplicate "hi" transcriptions which happen often
-        if text.lower() == "hi" and "hi" in self.accumulated_text.lower():
-            self.logger.debug("Skipping duplicate 'hi' transcription")
+        self.logger.debug(f"Received transcription: {text}")
+        
+        # Clean up the text and filter hallucinations
+        text = text.strip()
+        if text == "." or not text:  # Skip empty or just punctuation
             return
             
-        # Add appropriate spacing between sentences
-        if self.accumulated_text:
-            if self.accumulated_text.endswith(('.', '!', '?', ':', ';')):
-                separator = " "
+        # Filter out hallucinated phrases
+        text = self._filter_hallucinations(text)
+        if not text:  # Skip if filtered out
+            return
+            
+        # Update accumulated text
+        if self.continuous_mode:
+            if self.accumulated_text:
+                # Add appropriate spacing between sentences
+                if self.accumulated_text.endswith(('.', '!', '?', ':', ';')):
+                    self.accumulated_text += " " + text
+                else:
+                    self.accumulated_text += ". " + text
             else:
-                separator = " "
+                self.accumulated_text = text
         else:
-            separator = ""
+            # In non-continuous mode, keep the current transcription
+            self.accumulated_text = text
         
-        # Add text with appropriate separator
-        new_text = text.strip()
-        self.accumulated_text += separator + new_text
-        self.accumulated_text = self.accumulated_text.strip()
-        
-        # Clean up the text - remove multiple spaces, fix capitalization
-        self.accumulated_text = ' '.join(self.accumulated_text.split())
-        
-        # Update UI
-        self.ui.update_text(self.accumulated_text, highlight_new=new_text)
+        # Update UI with accumulated text
+        self.ui.update_text(self.accumulated_text)
         word_count = len(self.accumulated_text.split())
         self.ui.update_word_count(word_count)
         
-        # Detect pause and stop recording if needed
-        if not self.continuous_mode and word_count > 5:
-            # After getting reasonable content, check for natural pause
-            elapsed = time.time() - self.recording_start_time
-            if elapsed > 2.0:  # At least 2 seconds of recording
-                self.logger.debug("Natural pause detected after transcription, stopping recording")
-                self.stop_recording()
-                
-                # Copy to clipboard for convenience
-                self._copy_to_clipboard()
-        
-        # Handle continuous mode
-        if self.continuous_mode and word_count > 10:
-            # Copy to clipboard and save
-            self._copy_to_clipboard()
-            self._save_transcript()
-            self._clear_transcript()
+        # Natural pause detection only in non-continuous mode
+        if self.recording and not self.continuous_mode:
+            self.logger.debug("Natural pause detected after transcription, stopping in 1.5 seconds unless more speech is detected")
             
-            # Start a new recording
-            self.start_recording()
+            def delayed_stop():
+                time.sleep(1.5)  # Wait for potential continued speech
+                if self.recording and not self.worker.has_recent_audio():
+                    self.logger.debug("No further speech detected, stopping recording")
+                    self.stop_recording()
+                    # Copy to clipboard in non-continuous mode
+                    if self.accumulated_text:
+                        self._copy_to_clipboard()
+            
+            # Start delayed stop thread
+            stop_thread = threading.Thread(target=delayed_stop)
+            stop_thread.daemon = True
+            stop_thread.start()
     
     def _copy_to_clipboard(self) -> None:
         """Copy the current transcript to clipboard."""

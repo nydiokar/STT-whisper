@@ -15,8 +15,8 @@ class AudioRecorder:
     
     def __init__(
         self,
-        sample_rate: int = 44100,
-        chunk_size: int = 4096,
+        sample_rate: int = 16000,  # Changed to 16kHz for Whisper
+        chunk_size: int = 2048,    # Reduced for better responsiveness
         channels: int = 1,
         format_type: int = pyaudio.paInt16,
         device_index: Optional[int] = None,
@@ -25,7 +25,7 @@ class AudioRecorder:
         """Initialize the audio recorder.
         
         Args:
-            sample_rate: Audio sample rate in Hz
+            sample_rate: Audio sample rate in Hz (default 16kHz for Whisper)
             chunk_size: Number of frames per buffer
             channels: Number of audio channels
             format_type: PyAudio format type
@@ -50,6 +50,17 @@ class AudioRecorder:
         self.stream: Optional[pyaudio.Stream] = None
         self.audio_data = bytearray()
         self.lock = threading.Lock()
+        
+        # Get actual device capabilities
+        if device_index is not None:
+            try:
+                device_info = self.py_audio.get_device_info_by_index(device_index)
+                self.device_sample_rate = int(device_info.get('defaultSampleRate', sample_rate))
+                self.logger.info(f"Device sample rate: {self.device_sample_rate}Hz")
+            except:
+                self.device_sample_rate = sample_rate
+        else:
+            self.device_sample_rate = sample_rate
         
     def __del__(self) -> None:
         """Clean up resources when the object is destroyed."""
@@ -84,7 +95,7 @@ class AudioRecorder:
             
             # Start the audio stream
             self.stream = self.py_audio.open(
-                rate=self.sample_rate,
+                rate=self.device_sample_rate,  # Use device's native rate
                 channels=self.channels,
                 format=self.format_type,
                 input=True,
@@ -94,7 +105,7 @@ class AudioRecorder:
             )
             
             self.is_recording = True
-            self.logger.info(f"Recording started (sample_rate={self.sample_rate}, chunk_size={self.chunk_size})")
+            self.logger.info(f"Recording started (device_rate={self.device_sample_rate}, target_rate={self.sample_rate})")
             return True
             
         except Exception as e:
@@ -106,7 +117,7 @@ class AudioRecorder:
         """Stop audio recording.
         
         Returns:
-            Recorded audio data as bytes
+            Recorded audio data as bytes, resampled to target rate if needed
         """
         if not self.is_recording:
             return bytes(self.audio_data)
@@ -120,9 +131,27 @@ class AudioRecorder:
         self.logger.info("Recording stopped")
         
         with self.lock:
-            result = bytes(self.audio_data)
+            # Resample if needed
+            if self.device_sample_rate != self.sample_rate:
+                try:
+                    audio_array = np.frombuffer(self.audio_data, dtype=np.int16)
+                    resampled = self._resample(audio_array, self.device_sample_rate, self.sample_rate)
+                    result = resampled.astype(np.int16).tobytes()
+                    self.logger.debug(f"Resampled audio from {self.device_sample_rate}Hz to {self.sample_rate}Hz")
+                except Exception as e:
+                    self.logger.error(f"Failed to resample audio: {e}")
+                    result = bytes(self.audio_data)
+            else:
+                result = bytes(self.audio_data)
         
         return result
+        
+    def _resample(self, audio_array: np.ndarray, from_rate: int, to_rate: int) -> np.ndarray:
+        """Resample audio data to a different sample rate."""
+        duration = len(audio_array) / from_rate
+        time_old = np.linspace(0, duration, len(audio_array))
+        time_new = np.linspace(0, duration, int(len(audio_array) * to_rate / from_rate))
+        return np.interp(time_new, time_old, audio_array)
         
     def _audio_callback(
         self, 
@@ -152,6 +181,11 @@ class AudioRecorder:
         # Call the data callback if provided
         if self.on_data_callback:
             try:
+                # Resample chunk if needed before sending to callback
+                if self.device_sample_rate != self.sample_rate:
+                    audio_array = np.frombuffer(in_data, dtype=np.int16)
+                    resampled = self._resample(audio_array, self.device_sample_rate, self.sample_rate)
+                    in_data = resampled.astype(np.int16).tobytes()
                 self.on_data_callback(in_data)
             except Exception as e:
                 self.logger.error(f"Error in audio data callback: {e}")

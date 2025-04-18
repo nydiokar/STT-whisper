@@ -2,6 +2,7 @@ from __future__ import annotations
 import keyboard
 import pyperclip
 import logging
+import atexit
 from typing import Protocol, Callable
 
 class EventHandler(Protocol):
@@ -20,6 +21,8 @@ class KeyboardEventManager:
         self.recording = False
         self.continuous_mode = False
         self.hotkeys = []
+        # Register cleanup on exit
+        atexit.register(self.clear_hotkeys)
         
     def setup_hotkeys(self) -> None:
         """Setup hotkeys for controlling the service."""
@@ -29,11 +32,11 @@ class KeyboardEventManager:
         self.clear_hotkeys()
         
         # Define hotkeys for different actions - store references to remove later
-        # Use add_hotkey with explicit callback wrappers to ensure proper removal
+        # Only suppress the combination, not individual keys
         self.hotkeys = [
-            keyboard.add_hotkey('alt+r', lambda: self._toggle_recording(), suppress=True),
-            keyboard.add_hotkey('alt+s', lambda: self._save_transcript(), suppress=True),
-            keyboard.add_hotkey('alt+c', lambda: self._clear_transcript(), suppress=True),
+            keyboard.add_hotkey('alt+r', lambda: self._toggle_recording()),
+            keyboard.add_hotkey('alt+s', lambda: self._save_transcript()),
+            keyboard.add_hotkey('alt+c', lambda: self._clear_transcript()),
         ]
         
         self.logger.info("Keyboard hotkeys configured")
@@ -46,11 +49,17 @@ class KeyboardEventManager:
                 keyboard.remove_hotkey(hotkey)
             self.hotkeys = []
             
-            # As a safety measure, unhook any remaining hotkeys
+            # As a safety measure, unhook all hotkeys registered by our app
             keyboard.unhook_all()
             self.logger.debug("All keyboard hotkeys cleared")
         except Exception as e:
             self.logger.error(f"Error clearing hotkeys: {e}")
+            # Force unregister all hooks as last resort
+            try:
+                keyboard._listener.remove_all_hotkeys()
+                keyboard._listener.stop_if_hook()
+            except:
+                pass
     
     def _toggle_recording(self) -> None:
         """Handle recording toggle hotkey."""

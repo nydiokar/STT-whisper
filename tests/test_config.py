@@ -79,7 +79,7 @@ def test_audio_config_invalid_channels():
 def test_transcription_config_defaults():
     """Test TranscriptionConfig default values."""
     config = TranscriptionConfig()
-    assert config.model_name == "base"
+    assert config.model_name == "large"
     assert config.device is None
     assert config.compute_type == "float16"
     assert config.language == "en"

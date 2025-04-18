@@ -1,6 +1,11 @@
 import pyaudio
 import sys
+import logging
 from .service import VoiceInputService
+from .core.config import Config
+from .core.model_manager import ModelManager
+from .ui.window import TranscriptionUI
+from .utils.logging import setup_logging
 
 def check_microphone() -> bool:
     """Pre-flight check of microphone access."""
@@ -43,19 +48,60 @@ def check_microphone() -> bool:
         print(f"\nFailed to initialize audio system: {str(e)}")
         return False
 
+def initialize_app() -> tuple[Config, TranscriptionUI, ModelManager]:
+    """Initialize application components.
+    
+    Returns:
+        Tuple of config, UI, and model manager
+    
+    Raises:
+        Exception: If initialization fails
+    """
+    # Setup logging first
+    logger = setup_logging()
+    logger.info("Starting Voice Input Service")
+    
+    # Load configuration
+    config = Config.load()
+    logger.info("Configuration loaded")
+    
+    # Initialize UI first (needed for model dialogs)
+    ui = TranscriptionUI()
+    
+    # Initialize ModelManager
+    model_manager = ModelManager(ui.window, config)
+    logger.info("Model manager initialized")
+    
+    return config, ui, model_manager
+
 def main() -> None:
     """Main entry point for the voice input service."""
     if not check_microphone():
         print("\nMicrophone check failed. Please fix the issues and try again.")
         sys.exit(1)
-        
-    service = VoiceInputService()
+    
     try:
+        # Initialize core components
+        config, ui, model_manager = initialize_app()
+        
+        # Initialize transcription engine
+        transcriber = model_manager.initialize_transcription_engine()
+        if not transcriber:
+            print("\nNo transcription model was selected or model initialization failed.")
+            print("Please run the application again and select a model.")
+            sys.exit(1)
+            
+        # Create service with initialized components
+        service = VoiceInputService(config, ui, transcriber)
         service.run()
+        
     except KeyboardInterrupt:
         print("\nService stopped by user")
     except Exception as e:
-        print(f"Error: {e}")
+        logger = logging.getLogger("VoiceService")
+        logger.error(f"Startup error: {e}", exc_info=True)
+        print(f"\nError: {e}")
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()

@@ -8,13 +8,13 @@ from pydantic import BaseModel, Field, field_validator
 
 class AudioConfig(BaseModel):
     """Audio recording configuration."""
-    sample_rate: int = Field(44100, description="Audio sample rate in Hz")
-    chunk_size: int = Field(4096, description="Size of audio chunks to process")
+    sample_rate: int = Field(16000, description="Audio sample rate in Hz")
+    chunk_size: int = Field(2048, description="Size of audio chunks to process")
     channels: int = Field(1, description="Number of audio channels (1=mono, 2=stereo)")
     format_type: int = Field(pyaudio.paInt16, description="Audio format type")
     device_index: Optional[int] = Field(None, description="Input device index, None for default")
-    silence_threshold: float = Field(0.05, description="RMS threshold for silence detection")
-    min_silence_length: float = Field(1.5, description="Minimum silence length in seconds")
+    silence_threshold: float = Field(0.04, description="RMS threshold for silence detection")
+    min_silence_length: float = Field(2.5, description="Minimum silence length in seconds")
     min_audio_length: int = Field(32000, description="Minimum audio length in samples before processing")
     min_process_interval: float = Field(0.5, description="Minimum interval between processing audio chunks")
     
@@ -35,12 +35,13 @@ class AudioConfig(BaseModel):
 
 class TranscriptionConfig(BaseModel):
     """Transcription configuration."""
-    model_name: str = Field("base", description="Whisper model name (tiny, base, small, medium, large)")
+    model_name: str = Field("medium", description="Whisper model name (tiny, base, small, medium, large)")
     device: Optional[str] = Field(None, description="Device to run model on (cpu, cuda)")
-    compute_type: str = Field("float16", description="Computation type (float16, float32, int8)")
+    compute_type: str = Field("float32", description="Computation type (float16, float32, int8)")
     language: Optional[str] = Field("en", description="Language code for transcription")
     translate: bool = Field(False, description="Whether to translate to English")
     cache_dir: Optional[str] = Field(None, description="Directory to cache models")
+    min_chunk_size: int = Field(32000, description="Minimum audio chunk size to process (in bytes)")
     
     @field_validator('model_name')
     @classmethod

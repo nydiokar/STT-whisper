@@ -2,6 +2,7 @@ from __future__ import annotations
 import os
 import logging
 from typing import Optional, List, Dict, Any, Tuple
+import numpy as np
 import whisper
 import tempfile
 import threading
@@ -12,209 +13,87 @@ import torch
 from whisper.tokenizer import LANGUAGES, TO_LANGUAGE_CODE
 
 class TranscriptionEngine:
-    """Engine for performing speech-to-text transcription using whisper."""
-    
+    """Engine responsible for speech-to-text transcription."""
+
     def __init__(
         self,
-        model_name: str = "base",
-        device: Optional[str] = None,
-        compute_type: str = "float16",
-        language: Optional[str] = None,
-        translate: bool = False,
-        verbose: bool = False,
-        cache_dir: Optional[str] = None
-    ) -> None:
-        """Initialize the transcription engine.
-        
+        model_name: str,
+        device: str = "auto",
+        language: str = "en",
+    ):
+        """Initialize Whisper model for transcription.
+
         Args:
-            model_name: Whisper model to use (tiny, base, small, medium, large)
-            device: Device to run the model on (cuda, cpu)
-            compute_type: Computation type (float16, float32, int8)
-            language: Language code for transcription
-            translate: Whether to translate to English
-            verbose: Whether to log detailed information
-            cache_dir: Directory to cache models
+            model_name: Name of the Whisper model to load
+            device: Device to use for inference
+            language: Language used for transcription
         """
-        self.logger = logging.getLogger("voice_input_service.core.transcription")
-        
-        # Configuration
-        self.model_name = model_name.lower()
+        self.logger = logging.getLogger(__name__)
+        self.model_name = model_name
+        self.device = device
         self.language = language
-        self.translate = translate
-        self.verbose = verbose
-        self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
-        self.compute_type = compute_type
+        self.model = None
         
-        # Loading state
-        self.model: Optional[whisper.Whisper] = None
-        self.loaded = False
-        self.loading_lock = threading.Lock()
+        # Check if we're using CPU and warn about large model
+        if self.device == "cpu" and self.model_name == "large":
+            self.logger.warning(
+                "Using 'large' model on CPU will be very slow. Consider using 'medium' or 'small' "
+                "model for better performance on CPU."
+            )
         
-        # Cache directory
-        if cache_dir:
-            os.makedirs(cache_dir, exist_ok=True)
-            
-        # Attempt to load the model
-        self._load_model(cache_dir)
+        # Don't load model yet - just set up parameters
+        self.logger.debug(f"Transcription engine initialized with model '{model_name}' (not loaded yet)")
+
+    def _load_model(self) -> None:
+        """Load the Whisper model.
         
-    def _load_model(self, cache_dir: Optional[str] = None) -> None:
-        """Load the whisper model.
-        
-        Args:
-            cache_dir: Directory to cache the model
-            
         Raises:
             RuntimeError: If model loading fails
         """
-        if self.loaded:
-            return
+        if self.model is not None:
+            return  # Model already loaded
             
-        with self.loading_lock:
-            if self.loaded:  # Double check in case of race condition
-                return
-                
-            try:
-                start_time = time.time()
-                self.logger.info(f"Loading whisper model '{self.model_name}' on {self.device}...")
-                
-                # Verify CUDA availability if requested
-                if self.device == "cuda" and not torch.cuda.is_available():
-                    raise RuntimeError("CUDA requested but not available. Falling back to CPU.")
-                
-                self.model = whisper.load_model(
-                    self.model_name,
-                    device=self.device,
-                    download_root=cache_dir,
-                    in_memory=True
-                )
-                
-                # Verify model loaded correctly
-                if not self.model:
-                    raise RuntimeError("Model loading returned None")
-                    
-                self.loaded = True
-                load_time = time.time() - start_time
-                self.logger.info(f"Model loaded in {load_time:.2f} seconds")
-                
-                # Log model info
-                if hasattr(self.model, 'dims'):
-                    self.logger.info(f"Model dimensions: {self.model.dims}")
-                if self.verbose:
-                    num_params = sum(p.numel() for p in self.model.parameters())
-                    self.logger.info(f"Model parameters: {num_params:,}")
-                    
-            except Exception as e:
-                self.loaded = False
-                error_msg = f"Failed to load whisper model: {str(e)}"
-                self.logger.error(error_msg, exc_info=True)
-                raise RuntimeError(error_msg) from e
-                
-    def transcribe(
-        self, 
-        audio_data: bytes,
-        sample_rate: int = 44100,
-        language: Optional[str] = None,
-        task: Optional[str] = None,
-        initial_prompt: Optional[str] = None
-    ) -> Dict[str, Any]:
-        """Transcribe audio data.
-        
-        Args:
-            audio_data: Raw audio data bytes
-            sample_rate: Sample rate of the audio data
-            language: Override language for transcription
-            task: Task to perform (transcribe or translate)
-            initial_prompt: Initial prompt for the transcription
-            
-        Returns:
-            Dictionary with transcription results
-            
-        Raises:
-            RuntimeError: If transcription fails or model is not loaded
-        """
-        if not self.loaded or self.model is None:
-            self.logger.warning("Model not loaded, attempting to load...")
-            try:
-                self._load_model()
-            except Exception as e:
-                error_msg = "Failed to load model for transcription"
-                self.logger.error(error_msg, exc_info=True)
-                raise RuntimeError(error_msg) from e
-            
-            if not self.loaded:
-                raise RuntimeError("Model failed to load")
-        
-        temp_file = None
+        self.logger.info(f"Loading model '{self.model_name}' on device '{self.device}'...")
         try:
-            # Create temp file in a way that ensures cleanup
-            temp_file = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+            # Force float32 on CPU to avoid warnings and potential issues
+            compute_type = "float32" if self.device == "cpu" else "float16"
             
-            # Write audio to temp WAV file
-            with wave.open(temp_file.name, "wb") as wf:
-                wf.setnchannels(1)  # Mono
-                wf.setsampwidth(2)  # 16-bit
-                wf.setframerate(sample_rate)
-                wf.writeframes(audio_data)
-            
-            # Prepare transcription options
-            language_code = language or self.language
-            options = {
-                "language": language_code,
-                "task": task or ("translate" if self.translate else "transcribe"),
-                "verbose": self.verbose
-            }
-            
-            if initial_prompt:
-                options["initial_prompt"] = initial_prompt
-                
-            if language_code:
-                if language_code in LANGUAGES:
-                    options["language"] = language_code
-                else:
-                    valid_code = TO_LANGUAGE_CODE.get(language_code)
-                    if valid_code:
-                        options["language"] = valid_code
-                    else:
-                        self.logger.warning(f"Unsupported language code: {language_code}")
-            
-            # Perform transcription
-            start_time = time.time()
-            self.logger.info(f"Starting transcription of {len(audio_data)/1024:.2f} KB audio")
-            
-            try:
-                result = self.model.transcribe(
-                    temp_file.name,
-                    fp16=(self.compute_type == "float16"),
-                    **options
-                )
-            except Exception as e:
-                error_msg = "Transcription failed"
-                self.logger.error(f"{error_msg}: {e}", exc_info=True)
-                raise RuntimeError(error_msg) from e
-            
-            transcription_time = time.time() - start_time
-            word_count = len(result.get("text", "").split())
-            
-            self.logger.info(
-                f"Transcription completed in {transcription_time:.2f}s, "
-                f"{word_count} words, {word_count/transcription_time:.1f} words/sec"
+            self.model = whisper.load_model(
+                self.model_name,
+                device=self.device,
             )
-            
-            return result
-            
+            self.logger.info(f"Successfully loaded model '{self.model_name}'")
         except Exception as e:
-            error_msg = "Unexpected error during transcription"
-            self.logger.error(f"{error_msg}: {e}", exc_info=True)
-            raise RuntimeError(error_msg) from e
+            self.logger.error(f"Failed to load model '{self.model_name}': {e}")
+            raise RuntimeError(f"Failed to load model: {e}") from e
+
+    def transcribe(self, audio: bytes, prompt: str = "") -> Dict[str, Any]:
+        """Transcribe audio to text.
+
+        Args:
+            audio: Raw audio bytes to transcribe
+            prompt: Prompt to guide transcription
+
+        Returns:
+            Transcription result
+        """
+        # Ensure model is loaded before transcribing
+        if self.model is None:
+            self._load_model()
             
-        finally:
-            # Clean up temp file
-            if temp_file:
-                try:
-                    os.unlink(temp_file.name)
-                except Exception as e:
-                    self.logger.warning(f"Failed to remove temp file: {e}")
-    
+        options = dict(language=self.language)
+        if prompt:
+            options["initial_prompt"] = prompt
+
+        # Convert bytes to float32 array that Whisper expects
+        audio_data = np.frombuffer(audio, dtype=np.int16).astype(np.float32) / 32768.0
+        
+        # Log length of audio for debugging
+        audio_duration = len(audio_data) / 16000  # Whisper uses 16kHz
+        self.logger.debug(f"Processing {audio_duration:.1f}s of audio")
+
+        return self.model.transcribe(audio_data, **options)
+
     def get_available_languages(self) -> Dict[str, str]:
         """Get available languages for transcription.
         
@@ -229,14 +108,13 @@ class TranscriptionEngine:
         Returns:
             Dictionary with model information
         """
-        if not self.loaded or self.model is None:
+        if not self.model:
             return {"status": "not_loaded"}
             
         info = {
             "name": self.model_name,
             "device": self.device,
-            "compute_type": self.compute_type,
-            "loaded": self.loaded
+            "loaded": bool(self.model)
         }
         
         if hasattr(self.model, "dims"):
