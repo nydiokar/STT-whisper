@@ -85,6 +85,11 @@ class KeyboardEventManager:
         self.logger.info("Clear transcript requested")
         self.handler.clear_transcript()
     
+    # Alias methods to match test expectations
+    _on_toggle_recording_hotkey = _toggle_recording
+    _on_save_hotkey = _save_transcript
+    _on_clear_hotkey = _clear_transcript
+    
     def __del__(self) -> None:
         """Clean up event handlers."""
         self.clear_hotkeys()  # Use our safer method 

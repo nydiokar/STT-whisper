@@ -2,14 +2,14 @@ from __future__ import annotations
 import threading
 import queue
 import logging
-from typing import Callable
+from typing import Callable, Optional
 import time
 
 class TranscriptionWorker:
     """Manages threaded audio processing and transcription."""
     
     def __init__(self, 
-                 process_func: Callable[[bytes], str | None],
+                 process_func: Callable[[bytes], Optional[str]],
                  on_result: Callable[[str], None],
                  min_audio_length: int = 32000) -> None:
         """Initialize the worker.
@@ -24,7 +24,7 @@ class TranscriptionWorker:
         self.on_result = on_result
         self.min_audio_length = min_audio_length
         self.running = False
-        self.thread: threading.Thread | None = None
+        self.thread: Optional[threading.Thread] = None
         self.audio_queue: queue.Queue[bytes] = queue.Queue()
         
         # Controls for better response
@@ -64,11 +64,12 @@ class TranscriptionWorker:
     
     def _worker(self) -> None:
         """Worker thread that processes audio chunks."""
-        accumulated_data = b""
+        accumulated_data = bytearray()
         last_process_time = time.time()
         last_audio_time = time.time()
-        min_process_interval = 1.5  # Slower processing to avoid excessive logs
+        min_process_interval = 1.5
         processing_in_progress = False
+        error_count = 0  # Track consecutive errors
         
         while self.running:
             try:
@@ -80,36 +81,42 @@ class TranscriptionWorker:
                 # Get audio data with timeout
                 try:
                     chunk = self.audio_queue.get(timeout=0.2)
-                    accumulated_data += chunk
+                    accumulated_data.extend(chunk)
                     last_audio_time = current_time
+                    error_count = 0  # Reset error count on successful processing
                     
-                    # Log only when buffer is full
                     if buffer_full and time_to_process:
                         data_duration = len(accumulated_data) / 32000
                         self.logger.info(f"Processing {data_duration:.1f}s of audio")
                         
                 except queue.Empty:
-                    # No new data
                     if not processing_in_progress and accumulated_data and len(accumulated_data) > 8000 and (silence_detected or time_to_process):
                         processing_in_progress = True
                         self._process_chunk(bytes(accumulated_data))
-                        accumulated_data = b""  # Reset accumulated data
+                        accumulated_data = bytearray()
                         last_process_time = current_time
                         processing_in_progress = False
                     continue
                 
-                # Process when buffer is full
                 if not processing_in_progress and buffer_full and time_to_process:
                     processing_in_progress = True
                     self._process_chunk(bytes(accumulated_data))
-                    accumulated_data = b""  # Reset accumulated data
+                    accumulated_data = bytearray()
                     last_process_time = current_time
                     processing_in_progress = False
                     
             except Exception as e:
-                self.logger.error(f"Error in transcription worker: {e}")
+                self.logger.error(f"Critical error in worker thread: {e}", exc_info=True)
+                error_count += 1
                 processing_in_progress = False
-                time.sleep(0.2)  # Pause on error
+                
+                # If we get too many consecutive errors, stop the worker
+                if error_count >= 5:
+                    self.logger.critical("Too many consecutive errors, stopping worker")
+                    self.running = False
+                    break
+                    
+                time.sleep(0.5)  # Pause on error to prevent rapid loops
                 continue
         
         # Process any remaining audio before stopping
@@ -117,26 +124,27 @@ class TranscriptionWorker:
             try:
                 self._process_chunk(bytes(accumulated_data))
             except Exception as e:
-                self.logger.error(f"Error processing final audio: {e}")
+                self.logger.error(f"Error processing final audio: {e}", exc_info=True)
     
     def _process_chunk(self, audio_data: bytes) -> None:
         """Process a chunk of audio data in a separate thread."""
+        if not audio_data or len(audio_data) < 2000:
+            self.logger.debug(f"Skipping processing of small audio chunk ({len(audio_data)} bytes)")
+            return
+        
         try:
-            # Add a check to prevent processing of very small audio chunks
-            if not audio_data or len(audio_data) < 2000:
-                self.logger.debug(f"Skipping processing of small audio chunk ({len(audio_data)} bytes)")
-                return
-            
             # Process with error catching
-            try:    
-                text = self.process_func(audio_data)
-                if text:
-                    self.logger.debug(f"Transcription result: {text}")
+            text = self.process_func(audio_data)
+            if text:
+                self.logger.debug(f"Transcription result: {text}")
+                try:
                     self.on_result(text)
-                else:
-                    self.logger.debug("No text from transcription")
-            except Exception as e:
-                self.logger.error(f"Error in transcription function: {e}", exc_info=True)
-                # Continue processing - don't let one error stop everything
+                except Exception as e:
+                    self.logger.error(f"Error in result callback: {e}", exc_info=True)
+                    # Don't re-raise as this is a callback error, not a processing error
+            else:
+                self.logger.debug("No text from transcription")
         except Exception as e:
-            self.logger.error(f"Error processing audio chunk: {e}", exc_info=True) 
+            self.logger.error(f"Error processing audio chunk: {e}", exc_info=True)
+            # Sleep briefly to prevent rapid error loops
+            time.sleep(0.5) 

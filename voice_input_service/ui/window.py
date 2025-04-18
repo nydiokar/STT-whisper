@@ -26,6 +26,9 @@ class TranscriptionUI:
             "error": "#ffaaaa"       # Darker red
         }
         
+        # Track current status to avoid duplicate logs
+        self.current_status = ""
+        
         self._setup_ui()
         self.logger.info("UI initialized")
         
@@ -131,15 +134,24 @@ class TranscriptionUI:
             status = f"{animation_text} {'(Continuous)' if continuous else ''}"
             color = "recording"
             
+            # Only log if starting to record (transition from not recording)
+            if self.current_status != "recording":
+                self.logger.info(f"Status: {status}")
+                self.current_status = "recording"
+                
             self.status_label.config(text=status)
             self.update_status_color(color)
         else:
             status = "Ready"
             color = "ready"
+            
+            # Only log if status changed from previous state
+            if self.current_status != "ready":
+                self.logger.info(f"Status: {status}")
+                self.current_status = "ready"
+                
             self.status_label.config(text=status)
             self.update_status_color(color)
-            # Log status change only when transitioning between states
-            self.logger.info(f"Status: {status}")
     
     def update_word_count(self, count: int) -> None:
         """Update the word count display."""

@@ -3,6 +3,7 @@ import os
 import pytest
 from pathlib import Path
 from datetime import datetime
+import logging
 from voice_input_service.utils.file_ops import TranscriptManager
 
 @pytest.fixture
@@ -52,4 +53,56 @@ def test_get_transcript_files(transcript_manager: TranscriptManager) -> None:
     
     result = transcript_manager.get_transcript_files()
     assert len(result) == 3
-    assert result == sorted(files) 
+    assert result == sorted(files)
+
+def test_read_transcript(transcript_manager: TranscriptManager) -> None:
+    """Test reading a transcript file correctly retrieves content."""
+    test_content = "This is a test transcript"
+    file_path = Path(transcript_manager.output_dir) / "test_read.txt"
+    file_path.write_text(test_content)
+    
+    result = transcript_manager.read_transcript(str(file_path))
+    assert result == test_content
+
+def test_read_nonexistent_transcript(transcript_manager: TranscriptManager, caplog: pytest.LogCaptureFixture) -> None:
+    """Test reading a non-existent transcript file returns None and logs error."""
+    caplog.set_level(logging.ERROR)
+    nonexistent_path = Path(transcript_manager.output_dir) / "nonexistent.txt"
+    
+    result = transcript_manager.read_transcript(str(nonexistent_path))
+    assert result is None
+    assert "Error reading transcript:" in caplog.text
+
+def test_save_transcript_exception(transcript_manager: TranscriptManager, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+    """Test exception handling in save_transcript."""
+    caplog.set_level(logging.ERROR)
+    
+    # Mock open to raise an exception
+    def mock_open(*args, **kwargs):
+        raise IOError("Mock file error")
+    
+    monkeypatch.setattr("builtins.open", mock_open)
+    
+    result = transcript_manager.save_transcript("Test content")
+    assert result is None
+    assert "Error saving transcript:" in caplog.text
+
+def test_get_transcript_files_exception(transcript_manager: TranscriptManager, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+    """Test exception handling in get_transcript_files."""
+    caplog.set_level(logging.ERROR)
+    
+    # Mock the glob method to raise an exception
+    def mock_glob(*args, **kwargs):
+        raise Exception("Mock glob error")
+    
+    monkeypatch.setattr(Path, "glob", mock_glob)
+    
+    result = transcript_manager.get_transcript_files()
+    assert result == []
+    assert "Error listing transcripts:" in caplog.text
+
+def test_init_without_base_dir() -> None:
+    """Test initializing without specifying a base directory."""
+    manager = TranscriptManager()
+    assert manager.base_dir == Path.home() / "Documents" / "Voice Transcripts"
+    assert manager.output_dir == manager.base_dir 
