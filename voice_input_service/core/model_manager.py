@@ -131,7 +131,8 @@ class ModelManager:
             "base": "~142MB",
             "small": "~466MB",
             "medium": "~1.5GB",
-            "large": "~3GB"
+            "large": "~3GB",
+            "turbo": "~1.5GB"
         }
         
         size = model_sizes.get(model_name, "unknown size")

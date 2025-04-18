@@ -133,13 +133,34 @@ class VoiceInputService(EventHandler):
         
         if not audio_data or len(audio_data) < min_chunk_size:
             return None
-        
+
         try:
-            # Transcribe the audio data directly
+            # Convert bytes to numpy array for audio analysis
+            audio_array = np.frombuffer(audio_data, dtype=np.int16)
+            
+            # Calculate RMS value to detect silence
+            rms = np.sqrt(np.mean(np.square(audio_array, dtype=np.float64)))
+            
+            # Skip if the audio is too quiet (likely silence)
+            # Typical silence threshold for 16-bit audio is around 500-1000
+            silence_threshold = 500
+            if rms < silence_threshold:
+                self.logger.debug(f"Skipping silent audio chunk (RMS: {rms:.2f})")
+                return None
+            
+            # Transcribe the audio data
             result = self.transcriber.transcribe(audio=audio_data)
             
-            # Return the transcribed text
-            return result.get("text", "").strip()
+            # Get the text and apply more aggressive filtering
+            text = result.get("text", "").strip()
+            
+            # Skip very short results as they're often hallucinations
+            if len(text.split()) <= 2:
+                self.logger.debug(f"Skipping very short result: '{text}'")
+                return None
+                
+            return text
+            
         except Exception as e:
             self.logger.error(f"Error transcribing audio: {e}")
             return None
@@ -220,13 +241,21 @@ class VoiceInputService(EventHandler):
             "like and subscribe",
             "see you in the next video",
             "thanks for listening",
-            "thank you.",  # Added simple "thank you"
-            "thank you",  # Added partial match
+            "thank you.",
+            "thank you",
             "subscribe to",
             "click the",
             "check out",
             "in this video",
             "in today's video",
+            "please",  # Added common single-word hallucinations
+            "thanks",
+            "goodbye",
+            "bye bye",
+            "see you",
+            "welcome",
+            "hello everyone",
+            "hi everyone",
         ]
         
         # Convert to lower case for comparison
@@ -237,10 +266,10 @@ class VoiceInputService(EventHandler):
             self.logger.debug(f"Filtered exact hallucination match: {text}")
             return ""
             
-        # 2. Check if the text starts with any of these patterns
+        # 2. Check if the text starts or ends with any of these patterns
         for pattern in hallucination_patterns:
-            if text_lower.startswith(pattern):
-                self.logger.debug(f"Filtered prefix hallucination: {text}")
+            if text_lower.startswith(pattern) or text_lower.endswith(pattern):
+                self.logger.debug(f"Filtered prefix/suffix hallucination: {text}")
                 return ""
                 
         # 3. Check if the text is mostly composed of hallucinated content
@@ -253,7 +282,7 @@ class VoiceInputService(EventHandler):
         
         # 4. Additional heuristics for short responses
         if len(text.split()) <= 3:  # For very short responses
-            if any(word in text_lower for word in ["thanks", "thank", "please", "subscribe"]):
+            if any(word in text_lower for word in ["thanks", "thank", "please", "subscribe", "hello", "hi", "hey"]):
                 self.logger.debug(f"Filtered short hallucination: {text}")
                 return ""
         

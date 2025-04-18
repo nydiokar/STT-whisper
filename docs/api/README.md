@@ -10,159 +10,82 @@ The main service class that orchestrates all components.
 
 ```python
 class VoiceInputService(EventHandler):
-    def __init__(self) -> None:
-        # Initialize service components
+    def __init__(self, config: Config, ui: TranscriptionUI, transcriber: TranscriptionEngine) -> None:
+        """Initialize service components."""
         
     def start_recording(self) -> bool:
         """Start audio recording.
         
         Returns:
-            bool: True if recording started successfully, False otherwise
+            bool: True if recording started successfully
         """
         
     def stop_recording(self) -> str:
-        """Stop audio recording and return the transcription.
+        """Stop recording and return transcription.
         
         Returns:
             str: The accumulated transcription text
         """
         
-    def save_transcript(self) -> None:
-        """Save the current transcript to a file."""
-        
-    def clear_transcript(self) -> None:
-        """Clear the current transcript."""
-        
-    def run(self) -> None:
-        """Run the service main loop."""
-```
-
-### AudioProcessor
-
-Handles audio input capture and streaming.
-
-```python
-class AudioProcessor:
-    def __init__(self, config: AudioConfig) -> None:
-        """Initialize audio processor.
+    def _process_audio_chunk(self, audio_data: bytes) -> Optional[str]:
+        """Process audio chunk with silence detection and filtering.
         
         Args:
-            config: Audio configuration settings
-        """
-        
-    def start_stream(self) -> bool:
-        """Start the audio stream.
-        
+            audio_data: Raw audio data to process
+            
         Returns:
-            bool: True if stream started successfully, False otherwise
+            Optional[str]: Filtered transcription text or None
         """
         
-    def stop_stream(self) -> None:
-        """Stop the audio stream."""
+    def _filter_hallucinations(self, text: str) -> str:
+        """Filter out common hallucinated phrases.
         
-    def cleanup(self) -> None:
-        """Clean up audio resources."""
+        Args:
+            text: Text to filter
+            
+        Returns:
+            str: Filtered text
+        """
+        
+    def _on_transcription_result(self, text: str) -> None:
+        """Handle transcription result with mode-specific behavior."""
 ```
 
-### TranscriptionService
+### TranscriptionEngine
 
 Handles audio-to-text conversion using Whisper.
 
 ```python
-class TranscriptionService:
-    def __init__(self, config: TranscriptionConfig) -> None:
-        """Initialize transcription service.
+class TranscriptionEngine:
+    def __init__(self, model_name: str = "base", language: str = "en") -> None:
+        """Initialize the transcription engine.
         
         Args:
-            config: Transcription configuration settings
+            model_name: Whisper model name
+            language: Default language code
         """
         
-    def process_audio(self, audio_data: bytes, context: str = "", language: str = "en") -> str:
-        """Process audio data and return transcription.
+    def transcribe(self, audio: Union[bytes, np.ndarray]) -> dict[str, Any]:
+        """Transcribe audio data.
         
         Args:
-            audio_data: Raw audio data to transcribe
-            context: Optional context from previous transcriptions
-            language: Language code for transcription
+            audio: Audio data to transcribe
             
         Returns:
-            str: Transcribed text
+            dict: Transcription result with text and metadata
         """
-```
-
-### TranscriptionWorker
-
-Background worker for processing audio asynchronously.
-
-```python
-class TranscriptionWorker:
-    def __init__(
-        self, 
-        process_func: Callable[[bytes], str], 
-        on_result: Callable[[str], None],
-        min_audio_length: int = 16000
-    ) -> None:
-        """Initialize worker thread.
+        
+    def set_language(self, language: str) -> None:
+        """Set transcription language.
         
         Args:
-            process_func: Function to process audio data
-            on_result: Callback for transcription results
-            min_audio_length: Minimum audio chunk size to process
+            language: ISO language code
         """
-        
-    def start(self) -> None:
-        """Start the worker thread."""
-        
-    def stop(self) -> None:
-        """Stop the worker thread."""
-        
-    def process(self, audio_data: bytes) -> None:
-        """Add audio data to the processing queue.
-        
-        Args:
-            audio_data: Raw audio data to process
-        """
-```
-
-### TranscriptionUI
-
-Manages the user interface.
-
-```python
-class TranscriptionUI:
-    def __init__(self) -> None:
-        """Initialize the UI components."""
-        
-    def update_status(self, is_recording: bool, elapsed: float = 0, continuous: bool = False) -> None:
-        """Update the status display.
-        
-        Args:
-            is_recording: Whether recording is active
-            elapsed: Elapsed recording time in seconds
-            continuous: Whether continuous mode is active
-        """
-        
-    def update_word_count(self, count: int) -> None:
-        """Update the word count display.
-        
-        Args:
-            count: Current word count
-        """
-        
-    def update_text(self, text: str) -> None:
-        """Update the text display.
-        
-        Args:
-            text: Text to display
-        """
-        
-    def run(self) -> None:
-        """Start the UI event loop."""
 ```
 
 ### KeyboardEventManager
 
-Manages keyboard shortcuts and event handling.
+Manages keyboard shortcuts and text insertion.
 
 ```python
 class KeyboardEventManager:
@@ -174,192 +97,189 @@ class KeyboardEventManager:
         """
         
     def setup_hotkeys(self) -> None:
-        """Setup keyboard event handlers."""
+        """Setup keyboard shortcuts."""
+        
+    def _toggle_insert_mode(self) -> None:
+        """Toggle between direct insertion and clipboard modes."""
+        
+    def _insert_or_copy_text(self, text: str) -> None:
+        """Insert text directly or copy to clipboard based on mode.
+        
+        Args:
+            text: Text to insert/copy
+        """
+        
+    def _paste_text(self) -> None:
+        """Paste text at current cursor position."""
+```
+
+### AudioProcessor
+
+Handles audio capture with silence detection.
+
+```python
+class AudioProcessor:
+    def __init__(
+        self,
+        sample_rate: int,
+        chunk_size: int,
+        silence_threshold: float = 500.0,
+        on_data: Callable[[bytes], None] = None
+    ) -> None:
+        """Initialize audio processor.
+        
+        Args:
+            sample_rate: Audio sample rate
+            chunk_size: Processing chunk size
+            silence_threshold: RMS threshold for silence
+            on_data: Callback for audio data
+        """
+        
+    def process_chunk(self, data: bytes) -> tuple[bool, float]:
+        """Process audio chunk and detect silence.
+        
+        Args:
+            data: Raw audio data
+            
+        Returns:
+            tuple: (is_silent, rms_value)
+        """
 ```
 
 ## Configuration Classes
 
 ### Config
 
-Central configuration for the application.
+Central configuration with nested components.
 
 ```python
-class Config:
-    model_size: str = "small"
-    sample_rate: int = 16000
-    chunk_size: int = 1024
-    channels: int = 1
-    format: int = pyaudio.paInt16
-    min_audio_length: int = 16000
-    keep_context: bool = True
-    hotkey: str = "alt+r"
+class Config(BaseModel):
+    """Application configuration."""
+    audio: AudioConfig
+    transcription: TranscriptionConfig
+    ui: UIConfig
+    hotkeys: HotkeyConfig
+    
+    def save(self) -> None:
+        """Save configuration to file."""
+        
+    @classmethod
+    def load(cls) -> Config:
+        """Load configuration from file."""
 ```
 
 ### AudioConfig
 
-Configuration for audio processing.
+Audio processing configuration.
 
 ```python
-class AudioConfig:
-    def __init__(
-        self,
-        sample_rate: int = 16000,
-        chunk_size: int = 1024,
-        channels: int = 1,
-        format: int = pyaudio.paInt16
-    ) -> None:
-        """Initialize audio configuration.
-        
-        Args:
-            sample_rate: Audio sample rate
-            chunk_size: Audio chunk size
-            channels: Number of audio channels
-            format: PyAudio format
-        """
+class AudioConfig(BaseModel):
+    """Audio configuration settings."""
+    sample_rate: int = Field(16000, description="Audio sample rate")
+    chunk_size: int = Field(1024, description="Audio chunk size")
+    channels: int = Field(1, description="Number of audio channels")
+    silence_threshold: float = Field(500.0, description="RMS threshold for silence")
+    device_index: Optional[int] = Field(None, description="Audio device index")
 ```
 
 ### TranscriptionConfig
 
-Configuration for transcription processing.
+Transcription settings.
 
 ```python
-class TranscriptionConfig:
-    def __init__(
-        self,
-        model_name: str = "small",
-        sample_rate: int = 16000,
-        chunk_size: int = 1024,
-        channels: int = 1,
-        format: int = pyaudio.paInt16,
-        processing_chunk_size: int = 16000,
-        language: str = "en"
-    ) -> None:
-        """Initialize transcription configuration.
-        
-        Args:
-            model_name: Whisper model name (tiny, base, small, medium, large)
-            sample_rate: Audio sample rate
-            chunk_size: Audio chunk size
-            channels: Number of audio channels
-            format: PyAudio format
-            processing_chunk_size: Minimum audio size for processing
-            language: Default language for transcription
-        """
+class TranscriptionConfig(BaseModel):
+    """Transcription configuration settings."""
+    model_name: str = Field("base", description="Whisper model name")
+    language: str = Field("en", description="Default language code")
+    min_chunk_size: int = Field(32000, description="Minimum audio chunk size")
+    hallucination_patterns: list[str] = Field(default_factory=list)
 ```
 
-## Utility Classes
+### UIConfig
 
-### TranscriptManager
-
-Manages transcript file operations.
+User interface configuration.
 
 ```python
-class TranscriptManager:
-    def __init__(self, output_dir: Optional[str] = None) -> None:
-        """Initialize transcript manager.
-        
-        Args:
-            output_dir: Directory to save transcripts
-        """
-        
-    def save_transcript(self, text: str) -> Optional[str]:
-        """Save transcript to file.
-        
-        Args:
-            text: Text to save
-            
-        Returns:
-            Optional[str]: Path to saved file or None if failed
-        """
-        
-    def get_transcript_files(self) -> list[str]:
-        """Get list of saved transcript files.
-        
-        Returns:
-            list[str]: List of file paths
-        """
+class UIConfig(BaseModel):
+    """UI configuration settings."""
+    window_title: str = Field("Voice Input Service")
+    update_interval: float = Field(0.25, description="UI update interval in seconds")
+    status_colors: dict[str, str] = Field(default_factory=dict)
 ```
 
-## Protocols
+### HotkeyConfig
 
-### EventHandler
-
-Protocol for event handling.
+Keyboard shortcut configuration.
 
 ```python
-class EventHandler(Protocol):
-    """Protocol for event handlers."""
-    def start_recording(self) -> bool: ...
-    def stop_recording(self) -> str: ...
-    def save_transcript(self) -> None: ...
-    def clear_transcript(self) -> None: ...
-```
-
-## Functions
-
-### setup_logging
-
-Set up logging configuration.
-
-```python
-def setup_logging(log_dir: Optional[str] = None) -> logging.Logger:
-    """Set up logging configuration.
-    
-    Args:
-        log_dir: Optional custom directory for log files
-        
-    Returns:
-        logging.Logger: Configured logger instance
-    """
+class HotkeyConfig(BaseModel):
+    """Hotkey configuration settings."""
+    toggle_recording: str = Field("alt+r", description="Toggle recording")
+    toggle_insert_mode: str = Field("alt+i", description="Toggle insert mode")
+    paste_text: str = Field("alt+v", description="Paste text")
+    save_transcript: str = Field("alt+s", description="Save transcript")
+    clear_text: str = Field("alt+c", description="Clear text")
 ```
 
 ## Usage Examples
 
-### Basic Service Usage
+### Basic Usage
 
 ```python
 from voice_input_service.service import VoiceInputService
+from voice_input_service.core.config import Config
 
-# Create and run the service
-service = VoiceInputService()
+# Load configuration
+config = Config.load()
+
+# Create and run service
+service = VoiceInputService(config)
 service.run()
 ```
 
 ### Custom Audio Configuration
 
 ```python
-from voice_input_service.service import VoiceInputService
-from voice_input_service.core.audio import AudioConfig
-import pyaudio
+from voice_input_service.core.config import AudioConfig
 
 # Create custom audio config
 audio_config = AudioConfig(
     sample_rate=44100,
     chunk_size=2048,
-    channels=1,
-    format=pyaudio.paInt16
+    silence_threshold=750.0
 )
 
-# Inject into service
-service = VoiceInputService()
-service.audio_config = audio_config
-service.run()
+# Update main config
+config.audio = audio_config
 ```
 
-### Custom Transcription Configuration
+### Custom Transcription Settings
 
 ```python
-from voice_input_service.service import VoiceInputService
-from voice_input_service.core.transcription import TranscriptionConfig
+from voice_input_service.core.config import TranscriptionConfig
 
 # Create custom transcription config
 transcription_config = TranscriptionConfig(
-    model_name="medium",  # Higher quality model
-    language="fr"         # French language
+    model_name="medium",
+    language="fr",
+    min_chunk_size=48000
 )
 
-# Inject into service
-service = VoiceInputService()
-service.transcription_config = transcription_config
-service.run()
+# Update main config
+config.transcription = transcription_config
+```
+
+### Custom Hotkeys
+
+```python
+from voice_input_service.core.config import HotkeyConfig
+
+# Create custom hotkey config
+hotkey_config = HotkeyConfig(
+    toggle_recording="ctrl+shift+r",
+    toggle_insert_mode="ctrl+shift+i"
+)
+
+# Update main config
+config.hotkeys = hotkey_config
 ``` 

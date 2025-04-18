@@ -38,7 +38,8 @@ class ModelSelectionDialog:
             "base": {"size": "~142MB", "accuracy": "low", "speed": "very fast"}, 
             "small": {"size": "~466MB", "accuracy": "medium", "speed": "fast"},
             "medium": {"size": "~1.5GB", "accuracy": "good", "speed": "moderate"},
-            "large": {"size": "~3GB", "accuracy": "best", "speed": "slow"}
+            "large": {"size": "~3GB", "accuracy": "best", "speed": "slow"},
+            "turbo": {"size": "~1.5GB", "accuracy": "best", "speed": "fastest"}
         }
         
         # Create dialog
@@ -240,6 +241,7 @@ class DownloadProgressDialog:
             "small": 466 * 1024 * 1024,     # 466 MB
             "medium": 1.5 * 1024 * 1024 * 1024,  # 1.5 GB
             "large": 3 * 1024 * 1024 * 1024,     # 3 GB
+            "turbo": 1.5 * 1024 * 1024 * 1024,  # 1.5 GB
         }
         
         # Create dialog

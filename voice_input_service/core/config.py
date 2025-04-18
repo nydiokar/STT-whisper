@@ -35,7 +35,7 @@ class AudioConfig(BaseModel):
 
 class TranscriptionConfig(BaseModel):
     """Transcription configuration."""
-    model_name: str = Field("medium", description="Whisper model name (tiny, base, small, medium, large)")
+    model_name: str = Field("turbo", description="Whisper model name (tiny, base, small, medium, large, turbo)")
     device: Optional[str] = Field(None, description="Device to run model on (cpu, cuda)")
     compute_type: str = Field("float32", description="Computation type (float16, float32, int8)")
     language: Optional[str] = Field("en", description="Language code for transcription")
@@ -46,7 +46,7 @@ class TranscriptionConfig(BaseModel):
     @field_validator('model_name')
     @classmethod
     def validate_model_name(cls, v: str) -> str:
-        valid_models = ["tiny", "base", "small", "medium", "large"]
+        valid_models = ["tiny", "base", "small", "medium", "large", "turbo"]
         if v.lower() not in valid_models:
             raise ValueError(f"Model name must be one of {valid_models}, got {v}")
         return v.lower()
