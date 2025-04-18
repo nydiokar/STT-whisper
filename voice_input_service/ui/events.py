@@ -3,6 +3,7 @@ import keyboard
 import pyperclip
 import logging
 import atexit
+import time
 from typing import Protocol, Callable
 
 class EventHandler(Protocol):
@@ -21,6 +22,7 @@ class KeyboardEventManager:
         self.recording = False
         self.continuous_mode = False
         self.hotkeys = []
+        self.insert_mode = False  # Whether to insert text directly
         # Register cleanup on exit
         atexit.register(self.clear_hotkeys)
         
@@ -32,14 +34,36 @@ class KeyboardEventManager:
         self.clear_hotkeys()
         
         # Define hotkeys for different actions - store references to remove later
-        # Only suppress the combination, not individual keys
         self.hotkeys = [
             keyboard.add_hotkey('alt+r', lambda: self._toggle_recording()),
             keyboard.add_hotkey('alt+s', lambda: self._save_transcript()),
             keyboard.add_hotkey('alt+c', lambda: self._clear_transcript()),
+            keyboard.add_hotkey('alt+i', lambda: self._toggle_insert_mode()),  # Toggle insert mode
+            keyboard.add_hotkey('alt+v', lambda: self._paste_text()),  # Paste text at cursor
         ]
         
         self.logger.info("Keyboard hotkeys configured")
+    
+    def _toggle_insert_mode(self) -> None:
+        """Toggle direct text insertion mode."""
+        self.insert_mode = not self.insert_mode
+        self.logger.info(f"Insert mode {'enabled' if self.insert_mode else 'disabled'}")
+        
+    def _paste_text(self) -> None:
+        """Paste text at current cursor position."""
+        if not pyperclip.paste():
+            self.logger.warning("No text in clipboard to paste")
+            return
+            
+        try:
+            # Small delay to ensure the target application is ready
+            time.sleep(0.1)
+            keyboard.write(pyperclip.paste())
+            self.logger.info("Text inserted at cursor position")
+        except Exception as e:
+            self.logger.error(f"Error inserting text: {e}")
+            # Fallback to normal paste
+            keyboard.send('ctrl+v')
     
     def clear_hotkeys(self) -> None:
         """Clear all registered hotkeys to prevent conflicts."""
@@ -61,6 +85,26 @@ class KeyboardEventManager:
             except:
                 pass
     
+    def _insert_or_copy_text(self, text: str) -> None:
+        """Insert text directly or copy to clipboard based on mode."""
+        if not text:
+            return
+            
+        if self.insert_mode:
+            try:
+                # Small delay to ensure target app is ready
+                time.sleep(0.1)
+                keyboard.write(text)
+                self.logger.info("Text inserted directly")
+            except Exception as e:
+                self.logger.error(f"Error inserting text: {e}")
+                # Fallback to clipboard
+                pyperclip.copy(text)
+                self.logger.info("Text copied to clipboard (fallback)")
+        else:
+            pyperclip.copy(text)
+            self.logger.info("Text copied to clipboard")
+    
     def _toggle_recording(self) -> None:
         """Handle recording toggle hotkey."""
         self.logger.debug("Recording hotkey pressed")
@@ -77,8 +121,7 @@ class KeyboardEventManager:
                 word_count = len(text.split())
                 self.logger.info(f"Transcription complete: {word_count} words")
                 if not self.continuous_mode:
-                    pyperclip.copy(text)
-                    self.logger.info("Text copied to clipboard")
+                    self._insert_or_copy_text(text)
             else:
                 self.logger.warning("No speech detected")
     

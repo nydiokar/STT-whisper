@@ -157,12 +157,6 @@ class VoiceInputService(EventHandler):
         self.recording_start_time = time.time()
         self.audio_buffer = bytearray()
         
-        # Clear accumulated text in non-continuous mode
-        if not self.continuous_mode:
-            self.accumulated_text = ""
-            self.ui.update_text("")
-            self.ui.update_word_count(0)
-        
         # Visual indication of recording
         self.ui.update_status_color("recording")
         
@@ -218,7 +212,7 @@ class VoiceInputService(EventHandler):
     
     def _filter_hallucinations(self, text: str) -> str:
         """Filter out common hallucinated phrases from Whisper."""
-        # Common YouTube-style endings that Whisper tends to hallucinate
+        # Common hallucinated phrases and their variations
         hallucination_patterns = [
             "thanks for watching",
             "thank you for watching",
@@ -226,18 +220,42 @@ class VoiceInputService(EventHandler):
             "like and subscribe",
             "see you in the next video",
             "thanks for listening",
+            "thank you.",  # Added simple "thank you"
+            "thank you",  # Added partial match
+            "subscribe to",
+            "click the",
+            "check out",
+            "in this video",
+            "in today's video",
         ]
         
         # Convert to lower case for comparison
-        text_lower = text.lower()
+        text_lower = text.lower().strip()
         
-        # Check if the text is mostly or entirely composed of hallucinated content
+        # 1. Check for exact matches of common hallucinations
+        if text_lower in hallucination_patterns:
+            self.logger.debug(f"Filtered exact hallucination match: {text}")
+            return ""
+            
+        # 2. Check if the text starts with any of these patterns
+        for pattern in hallucination_patterns:
+            if text_lower.startswith(pattern):
+                self.logger.debug(f"Filtered prefix hallucination: {text}")
+                return ""
+                
+        # 3. Check if the text is mostly composed of hallucinated content
         for pattern in hallucination_patterns:
             if pattern in text_lower:
                 # If the text is mostly the hallucinated pattern (allowing for some extra words)
                 if len(text.split()) <= len(pattern.split()) + 2:
-                    self.logger.debug(f"Filtered hallucinated phrase: {text}")
+                    self.logger.debug(f"Filtered partial hallucination: {text}")
                     return ""
+        
+        # 4. Additional heuristics for short responses
+        if len(text.split()) <= 3:  # For very short responses
+            if any(word in text_lower for word in ["thanks", "thank", "please", "subscribe"]):
+                self.logger.debug(f"Filtered short hallucination: {text}")
+                return ""
         
         return text
 
@@ -269,8 +287,14 @@ class VoiceInputService(EventHandler):
             else:
                 self.accumulated_text = text
         else:
-            # In non-continuous mode, keep the current transcription
-            self.accumulated_text = text
+            # In non-continuous mode, append with proper spacing
+            if self.accumulated_text:
+                if self.accumulated_text.endswith(('.', '!', '?', ':', ';')):
+                    self.accumulated_text += " " + text
+                else:
+                    self.accumulated_text += ". " + text
+            else:
+                self.accumulated_text = text
         
         # Update UI with accumulated text
         self.ui.update_text(self.accumulated_text)
