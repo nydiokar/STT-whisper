@@ -1,0 +1,102 @@
+[project]
+name = "voice-input-service"
+version = "0.1.0"
+description = "A system-wide voice-to-text service using OpenAI's Whisper"
+authors = [
+    {name = "Your Name", email = "your.email@example.com"}
+]
+dependencies = [
+    "openai-whisper>=20231117",
+    "pyaudio>=0.2.13",
+    "keyboard>=0.13.5",
+    "pyperclip>=1.8.2",
+    "pydantic>=2.5.2",
+    "ffmpeg-python>=0.2.0",  # For FFmpeg integration
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-mock>=3.11.1",
+    "pytest-cov>=4.1.0",
+    "pytest-asyncio>=0.21.1",  # For async tests
+    "pytest-xdist>=3.3.1",     # For parallel testing
+    "pytest-timeout>=2.1.0",   # For test timeouts
+    "pytest-randomly>=3.13.0", # For random test ordering
+    "mypy>=1.5.1",
+    "black>=23.7.0",
+    "isort>=5.12.0",
+    "ruff>=0.1.6",            # Fast Python linter
+    "coverage[toml]>=7.3.2",  # For coverage config in pyproject.toml
+]
+
+[project.urls]
+"Homepage" = "https://github.com/yourusername/voice-input-service"
+"Bug Tracker" = "https://github.com/yourusername/voice-input-service/issues"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+addopts = """
+    --cov=voice_input_service
+    --cov-report=term-missing
+    --cov-report=html
+    --cov-branch
+    --randomly-seed=1234
+    --randomly-dont-reset-seed
+    -v
+    -n auto
+    --timeout=30
+"""
+markers = [
+    "slow: marks tests as slow",
+    "integration: marks tests as integration tests",
+    "unit: marks tests as unit tests",
+    "audio: marks tests that involve audio processing",
+    "transcription: marks tests that involve transcription",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["voice_input_service"]
+omit = ["tests/*", "**/__init__.py"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+]
+show_missing = true
+fail_under = 80
+
+[tool.black]
+line-length = 88
+target-version = ["py38"]
+include = '\.pyi?$'
+
+[tool.isort]
+profile = "black"
+multi_line_output = 3
+
+[tool.ruff]
+select = [
+    "E",  # pycodestyle errors
+    "W",  # pycodestyle warnings
+    "F",  # pyflakes
+    "I",  # isort
+    "C",  # flake8-comprehensions
+    "B",  # flake8-bugbear
+]
+ignore = ["E501"]  # Line length is handled by black
+line-length = 88
+target-version = "py38"
+fix = true
