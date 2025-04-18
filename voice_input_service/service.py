@@ -104,11 +104,25 @@ class VoiceInputService(EventHandler):
     def _on_transcription_result(self, text: str) -> None:
         """Handle transcription result."""
         if text:
-            self.accumulated_text += " " + text
+            # Avoid duplicate "Hi" transcriptions
+            if text.strip().lower() == "hi" and "hi" in self.accumulated_text.lower():
+                self.logger.debug("Filtered duplicate 'hi' transcription")
+                return
+            
+            # Add appropriate spacing between sentences
+            if self.accumulated_text and not self.accumulated_text.endswith(('.', '!', '?', ':', ';')):
+                separator = " "
+            else:
+                separator = " "
+            
+            self.accumulated_text += separator + text
             self.accumulated_text = self.accumulated_text.strip()
             
-            # Update UI
-            self.ui.update_text(self.accumulated_text)
+            # Clean up the text - remove multiple spaces, fix capitalization
+            self.accumulated_text = ' '.join(self.accumulated_text.split())
+            
+            # Update UI with visual indication of new text
+            self.ui.update_text(self.accumulated_text, highlight_new=text)
             word_count = len(self.accumulated_text.split())
             self.ui.update_word_count(word_count)
             
@@ -129,13 +143,21 @@ class VoiceInputService(EventHandler):
     def _audio_callback(self, audio_data: bytes) -> None:
         """Process incoming audio data."""
         if self.recording:
-            self.worker.process(audio_data)
+            self.worker.add_audio(audio_data)
     
     def _update_status(self) -> None:
         """Update the UI status."""
         if self.recording:
             elapsed = time.time() - self.recording_start_time
             self.ui.update_status(True, elapsed, self.continuous_mode)
+            
+            # Process audio data from the audio processor queue
+            try:
+                audio_data = self.audio_processor.get_audio_data()
+                if audio_data:
+                    self.worker.add_audio(audio_data)
+            except Exception as e:
+                self.logger.error(f"Error processing audio data: {e}")
         else:
             self.ui.update_status(False)
     
@@ -155,13 +177,30 @@ class VoiceInputService(EventHandler):
         self.recording = True
         self.recording_start_time = time.time()
         
-        # Configure audio processor
+        # Visual indication that recording has started
+        self.ui.update_status_color("recording")
+        
+        # Configure audio processor and connect it to the worker
         self.audio_processor.recording = True
+        
+        # Set up a periodic callback to process audio
+        def periodic_audio_processing():
+            if self.recording:
+                audio_data = self.audio_processor.get_audio_data()
+                if audio_data:
+                    self.logger.debug(f"Periodic callback got {len(audio_data)} bytes")
+                    self.worker.add_audio(audio_data)
+                # Schedule next call
+                self.ui.window.after(50, periodic_audio_processing)  # More frequent updates
+                
+        # Schedule first call
+        self.ui.window.after(50, periodic_audio_processing)
         
         # Start audio stream
         if not self.audio_processor.start_stream():
             self.logger.error("Failed to start audio stream")
             self.recording = False
+            self.ui.update_status_color("error")
             return False
         
         # Start transcription worker
@@ -169,6 +208,9 @@ class VoiceInputService(EventHandler):
         
         # Reset pause detection
         self.transcription_service.pause_detected = False
+        
+        # Make sure the audio processor's queue is being monitored
+        self.logger.debug("Ensuring audio data flows to worker")
         
         return True
     
@@ -189,6 +231,20 @@ class VoiceInputService(EventHandler):
         
         # Update state
         self.recording = False
+        
+        # Visual indication that recording has stopped
+        self.ui.update_status_color("ready")
+        
+        # Ensure keyboard hooks are working properly by refreshing them
+        if hasattr(self, 'event_manager'):
+            self.event_manager.clear_hotkeys()
+            self.event_manager.setup_hotkeys()
+            self.logger.debug("Keyboard hotkeys refreshed")
+        
+        # Clear the transcription service cache to prevent duplicates on next start
+        if hasattr(self.transcription_service, '_transcript_cache'):
+            self.transcription_service._transcript_cache = set()
+            self.transcription_service._last_transcript = ""
         
         return self.accumulated_text
     
@@ -217,6 +273,12 @@ class VoiceInputService(EventHandler):
         self.accumulated_text = ""
         self.ui.update_text("")
         self.ui.update_word_count(0)
+        
+        # Clear transcription service cache
+        if hasattr(self.transcription_service, '_transcript_cache'):
+            self.transcription_service._transcript_cache = set()
+            self.transcription_service._last_transcript = ""
+        
         self.logger.info("Transcript cleared")
     
     def run(self) -> None:
@@ -225,20 +287,51 @@ class VoiceInputService(EventHandler):
         
         # Setup UI update timer
         def update_ui() -> None:
+            # Only log status changes, not periodic updates
+            old_status = self.ui.status_label.cget("text") if hasattr(self.ui, "status_label") else ""
+            
             self._update_status()
-            self.ui.window.after(100, update_ui)
+            
+            # Schedule next update - less frequent updates (500ms instead of 100ms)
+            if hasattr(self, 'ui') and hasattr(self.ui, 'window') and self.ui.window.winfo_exists():
+                self.ui.window.after(500, update_ui)
         
         # Start UI updates
-        self.ui.window.after(100, update_ui)
+        self.ui.window.after(500, update_ui)
         
-        # Start UI main loop
-        self.ui.run()
+        try:
+            # Start UI main loop
+            self.ui.run()
+        finally:
+            # Make sure we clean up properly when closing
+            self.logger.info("Main loop ended, cleaning up resources")
+            self._cleanup()
+    
+    def _cleanup(self) -> None:
+        """Clean up all resources properly."""
+        try:
+            # Stop recording if active
+            if self.recording:
+                self.stop_recording()
+            
+            # Clean up keyboard hooks explicitly
+            if hasattr(self, 'event_manager'):
+                self.event_manager.clear_hotkeys()
+                self.logger.debug("Keyboard hotkeys cleared")
+            
+            # Clean up audio resources
+            if hasattr(self, 'audio_processor'):
+                self.audio_processor.stop_stream()
+            
+            # Stop worker if running
+            if hasattr(self, 'worker'):
+                self.worker.stop()
+                
+            self.logger.info("All resources cleaned up")
+        except Exception as e:
+            self.logger.error(f"Error during cleanup: {e}", exc_info=True)
     
     def __del__(self) -> None:
         """Clean up service resources."""
         self.logger.info("Shutting down Voice Input Service")
-        if hasattr(self, 'recording') and self.recording:
-            self.stop_recording()
-        
-        if hasattr(self, 'worker'):
-            self.worker.stop()
+        self._cleanup()

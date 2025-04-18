@@ -3,15 +3,15 @@ import queue
 import pyaudio
 import logging
 from dataclasses import dataclass
-from typing import Optional, Callable
+from typing import Any, Optional, Callable, Dict, Tuple
 from pydantic import BaseModel, ConfigDict
 
 class AudioConfig(BaseModel):
     """Configuration for audio processing."""
     model_config = ConfigDict(frozen=True)  # Makes config immutable
     
-    sample_rate: int = 16000
-    chunk_size: int = 1024
+    sample_rate: int = 44100  # Changed to standard microphone rate
+    chunk_size: int = 4096    # Larger chunk size for better quality
     channels: int = 1
     format: int = pyaudio.paInt16
 
@@ -19,13 +19,27 @@ class AudioProcessor:
     """Handles audio recording and processing."""
     
     def __init__(self, config: AudioConfig) -> None:
+        """Initialize audio processor with the given configuration."""
         self.logger = logging.getLogger("VoiceService.Audio")
         self.config = config
-        self.recording: bool = False
+        self.recording = False
         self.audio_queue: queue.Queue[bytes] = queue.Queue()
-        self.audio: pyaudio.PyAudio = pyaudio.PyAudio()
-        self.stream: Optional[pyaudio.Stream] = None
-        self.logger.info("Audio processor initialized")
+        self.callback_counter = 0  # Track callback count for logging
+        
+        # Create PyAudio instance
+        self.audio = pyaudio.PyAudio()
+        self.stream: Optional[Any] = None  # PyAudio.Stream type is not exposed in typings
+        
+        # Get default device info
+        try:
+            device_info = self.audio.get_default_input_device_info()
+            self.device_rate = int(device_info.get('defaultSampleRate', 44100))
+            self.logger.info(f"Default microphone sample rate: {self.device_rate}Hz")
+        except Exception as e:
+            self.logger.warning(f"Could not get device info: {e}")
+            self.device_rate = 44100
+            
+        self.logger.debug(f"Audio processor initialized with {config}")
     
     def start_stream(self) -> bool:
         """Start the audio stream."""
@@ -59,14 +73,24 @@ class AudioProcessor:
             self.stream = None
             self.logger.info("Audio stream stopped")
     
-    def _audio_callback(self, in_data: bytes, frame_count: int, 
-                       time_info: dict, status: int) -> tuple[bytes, int]:
-        """Handle incoming audio data."""
-        if status:
-            self.logger.warning(f"Audio callback status: {status}")
+    def _audio_callback(self, in_data: bytes, frame_count: int, time_info: Dict[str, Any], status: int) -> Tuple[bytes, int]:
+        """Process audio data from the microphone."""
         if self.recording:
+            # Only log occasionally, this is called very frequently
+            if self.callback_counter == 0 or self.callback_counter % 1000 == 0:
+                self.logger.info(f"Audio streaming active, received {len(in_data)} bytes")
+            self.callback_counter += 1
+            
             self.audio_queue.put(in_data)
+        
         return (in_data, pyaudio.paContinue)
+    
+    def get_audio_data(self) -> bytes:
+        """Get audio data from the queue."""
+        try:
+            return self.audio_queue.get_nowait()
+        except queue.Empty:
+            return b""
     
     def __del__(self) -> None:
         """Clean up audio resources."""

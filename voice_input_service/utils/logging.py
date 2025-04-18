@@ -2,59 +2,40 @@ from __future__ import annotations
 import os
 import logging
 from logging.handlers import RotatingFileHandler
+import sys
+from datetime import datetime
+from typing import Optional
 
-def setup_logging(log_dir: str | None = None) -> logging.Logger:
-    """Set up logging configuration.
+def setup_logging(log_level: int = logging.INFO) -> logging.Logger:
+    """Setup application logging.
     
     Args:
-        log_dir: Optional custom directory for log files
+        log_level: The logging level to use
         
     Returns:
-        logging.Logger: Configured logger instance
+        Root logger
     """
+    # Create logger
     logger = logging.getLogger("VoiceService")
-    logger.setLevel(logging.DEBUG)
+    logger.setLevel(log_level)
     
-    # Remove any existing handlers
-    for handler in logger.handlers[:]:
-        handler.close()
-        logger.removeHandler(handler)
+    # Create console handler
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(log_level)
     
-    # Set up log directory
-    if log_dir is None:
-        log_dir = os.path.join(os.path.expanduser("~"), "Documents", "Transcripts", "logs")
-    os.makedirs(log_dir, exist_ok=True)
-    
-    # File handler
-    log_file = os.path.join(log_dir, "voice_service.log")
-    file_handler = RotatingFileHandler(
-        log_file,
-        maxBytes=5*1024*1024,  # 5MB
-        backupCount=5,
-        encoding='utf-8',
-        delay=False  # Open the file immediately
-    )
-    file_handler.setLevel(logging.DEBUG)
-    
-    # Console handler
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(logging.INFO)
-    
-    # Formatter
-    formatter = logging.Formatter(
-        '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    )
-    file_handler.setFormatter(formatter)
+    # Create formatter and add it to handlers
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     console_handler.setFormatter(formatter)
     
-    logger.addHandler(file_handler)
+    # Add handlers to logger
     logger.addHandler(console_handler)
     
-    # Write an initial message to ensure file is created
+    # Set specific component log levels
+    logging.getLogger("VoiceService.Events").setLevel(logging.INFO)
+    logging.getLogger("VoiceService.Worker").setLevel(logging.INFO)
+    logging.getLogger("VoiceService.Audio").setLevel(logging.INFO)
+    logging.getLogger("VoiceService.Transcription").setLevel(logging.INFO)
+    logging.getLogger("VoiceService.UI").setLevel(logging.INFO)
+    
     logger.debug("Logging initialized")
-    
-    # Force a flush to ensure messages are written
-    for handler in logger.handlers:
-        handler.flush()
-    
     return logger 

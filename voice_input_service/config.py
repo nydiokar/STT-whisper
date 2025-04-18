@@ -14,15 +14,12 @@ class Config(BaseModel):
     keep_context: bool = True  # Whether to maintain context between chunks
     
     # Audio settings are fixed for Whisper compatibility
-    sample_rate: int = 16000  # Whisper expects 16kHz
-    chunk_size: int = 1024
+    sample_rate: int = 44100  # Higher sample rate for better quality
+    chunk_size: int = 4096    # Larger chunk size
     channels: int = 1
     format: int = pyaudio.paInt16
-    min_audio_length: int = 16000  # Minimum number of samples to process
-    
-    # Hotkey settings
-    hotkey: str = "windows+g"  # Different from Windows built-in STT
-    
+    min_audio_length: int = 32000  # Minimum number of samples to process
+
     @property
     def model_name(self) -> str:
         """Alias for model_size to maintain compatibility."""
