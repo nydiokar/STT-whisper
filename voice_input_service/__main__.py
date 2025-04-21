@@ -2,7 +2,7 @@ import pyaudio
 import sys
 import logging
 from .service import VoiceInputService
-from .core.config import Config
+from .config import Config
 from .core.model_manager import ModelManager
 from .ui.window import TranscriptionUI
 from .utils.logging import setup_logging

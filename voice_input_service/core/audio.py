@@ -202,7 +202,10 @@ class AudioRecorder:
             return bytes(self.audio_data)
             
     def is_silent(self, audio_data: bytes, threshold: int = 400) -> bool:
-        """Check if an audio chunk is silent.
+        """Check if an audio chunk is silent using basic RMS thresholding.
+        
+        Note: This method is primarily for diagnostic purposes. The main VAD 
+        functionality is implemented in TranscriptionWorker with more advanced options.
         
         Args:
             audio_data: Audio data to check

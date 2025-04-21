@@ -11,6 +11,50 @@ from pathlib import Path
 
 logger = logging.getLogger("VoiceService.Transcription.WhisperCPP")
 
+class TempWavFile:
+    """Context manager for temporary WAV files with automatic cleanup."""
+    
+    def __init__(self, audio_data: bytes, suffix: str = ".wav"):
+        self.audio_data = audio_data
+        self.suffix = suffix
+        self.file_path = None
+        
+    def __enter__(self) -> str:
+        """Create temporary file and write audio data.
+        
+        Returns:
+            Path to the temporary file
+        """
+        fd, self.file_path = tempfile.mkstemp(suffix=self.suffix)
+        os.close(fd)  # Close the file descriptor immediately
+        
+        # Write audio data to WAV file
+        _write_wav_file(self.file_path, self.audio_data)
+        
+        return self.file_path
+        
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        """Clean up the temporary file."""
+        self._cleanup()
+        
+    def _cleanup(self) -> None:
+        """Clean up temporary files."""
+        if self.file_path and os.path.exists(self.file_path):
+            try:
+                os.unlink(self.file_path)
+                logger.debug(f"Deleted temporary file: {self.file_path}")
+            except Exception as e:
+                logger.warning(f"Failed to delete temporary file {self.file_path}: {e}")
+        
+        # Also clean up potential output file
+        output_path = f"{self.file_path}.txt" if self.file_path else None
+        if output_path and os.path.exists(output_path):
+            try:
+                os.unlink(output_path)
+                logger.debug(f"Deleted output file: {output_path}")
+            except Exception as e:
+                logger.warning(f"Failed to delete output file {output_path}: {e}")
+
 def transcribe(audio_data: bytes, 
                model_path: str,
                main_path: str,
@@ -54,14 +98,8 @@ def transcribe(audio_data: bytes,
         logger.error(error_msg)
         return f"Error: {error_msg}"
     
-    # Save audio to a temporary WAV file
-    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_audio:
-        temp_audio_path = temp_audio.name
-    
-        # Write audio data to WAV file
-        _write_wav_file(temp_audio_path, audio_data)
-    
-    try:
+    # Process audio using a context manager for cleanup
+    with TempWavFile(audio_data) as temp_audio_path:
         # Create output file path
         output_path = f"{temp_audio_path}.txt"
         
@@ -90,10 +128,6 @@ def transcribe(audio_data: bytes,
             elapsed_time = time.time() - start_time
             logger.info(f"whisper.cpp transcription completed in {elapsed_time:.2f} seconds")
             
-            logger.debug(f"Command output: {process.stdout}")
-            if process.stderr:
-                logger.warning(f"Command stderr: {process.stderr}")
-                
             # Read the output file
             if os.path.exists(output_path):
                 with open(output_path, "r", encoding="utf-8") as f:
@@ -106,6 +140,7 @@ def transcribe(audio_data: bytes,
                     return process.stdout
                 else:
                     return "Error: No output produced"
+                    
         except subprocess.CalledProcessError as e:
             logger.error(f"Command failed with exit code {e.returncode}")
             logger.error(f"Command output: {e.stdout}")
@@ -114,14 +149,6 @@ def transcribe(audio_data: bytes,
         except Exception as e:
             logger.error(f"Error running whisper.cpp: {e}")
             return f"Error: {str(e)}"
-    finally:
-        # Clean up temporary files
-        for path in [temp_audio_path, output_path]:
-            if os.path.exists(path):
-                try:
-                    os.unlink(path)
-                except Exception as e:
-                    logger.warning(f"Failed to delete temporary file {path}: {e}")
 
 def _write_wav_file(file_path: str, audio_data: bytes) -> None:
     """

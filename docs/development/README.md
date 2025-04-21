@@ -45,25 +45,168 @@ STT/
 │   ├── config.py             # Central configuration
 │   ├── service.py            # Main service
 │   ├── core/                 # Core functionality
-│   │   ├── audio.py          # Audio handling
-│   │   ├── transcription.py  # Transcription service
-│   │   └── processing.py     # Worker thread
+│   │   ├── audio.py          # Audio recording and processing
+│   │   ├── transcription.py  # Speech-to-text conversion
+│   │   ├── processing.py     # Worker thread with VAD
+│   │   ├── model_manager.py  # AI model management
+│   │   ├── whisper_cpp.py    # Whisper.cpp integration
+│   │   └── chunk_buffer.py   # Audio chunk management
 │   ├── ui/                   # User interface
 │   │   ├── window.py         # Main UI window
+│   │   ├── dialogs.py        # UI dialog components
 │   │   └── events.py         # Event handling
 │   └── utils/                # Utilities
-│       ├── file_ops.py       # File operations
-│       └── logging.py        # Logging setup
+│       ├── file_ops.py       # Transcript file operations
+│       ├── logging.py        # Logging configuration
+│       ├── silence_detection.py # Voice activity detection
+│       ├── clipboard.py      # Clipboard operations
+│       └── lifecycle.py      # Component lifecycle interfaces
 ├── tests/                    # Test suite
 │   ├── conftest.py           # Test fixtures
 │   ├── test_audio.py         # Audio tests
 │   ├── test_transcription.py # Transcription tests
 │   ├── test_service.py       # Service tests
-│   └── ...
+│   ├── test_processing.py    # Worker thread tests
+│   ├── test_ui.py            # UI tests
+│   ├── test_file_ops.py      # File operations tests
+│   ├── test_utils.py         # Utility tests
+│   ├── test_model_manager.py # Model manager tests
+│   ├── test_config.py        # Configuration tests
+│   ├── test_main.py          # Entry point tests
+│   └── test_data/            # Test data files
 ├── docs/                     # Documentation
+│   ├── architecture/         # Architecture documentation
+│   ├── api/                  # API documentation
+│   ├── user_guide/           # User documentation
+│   └── development/          # Development documentation
+├── examples/                 # Example applications
 ├── pyproject.toml            # Project configuration
 └── README.md                 # Project overview
 ```
+
+## Architecture Overview
+
+The Voice Input Service follows a modular architecture with clear separation of concerns:
+
+### Core Layer
+
+1. **VoiceInputService** (`service.py`) - Central orchestrator:
+   - Manages recording state and application lifecycle
+   - Processes audio and updates transcription
+   - Handles UI updates and event processing
+   - Coordinates all core components
+
+2. **Audio System** (`core/audio.py`):
+   - Configures and manages audio input devices
+   - Captures raw audio data via PyAudio
+   - Provides audio stream callbacks
+   - Supports device selection and configuration
+
+3. **Transcription Engine** (`core/transcription.py`):
+   - Interfaces with Whisper AI models for speech-to-text
+   - Supports multiple languages and model sizes
+   - Implements hallucination filtering
+   - Handles both Python Whisper and whisper.cpp backends
+
+4. **Worker Thread** (`core/processing.py`):
+   - Processes audio chunks asynchronously 
+   - Implements Voice Activity Detection (VAD)
+   - Maintains audio queue and buffering
+   - Provides callback-based results handling
+
+5. **Model Management** (`core/model_manager.py`):
+   - Handles model downloading and verification
+   - Manages whisper.cpp integration
+   - Provides model selection capabilities
+   - Checks for available models and versions
+
+6. **Chunk Buffer** (`core/chunk_buffer.py`):
+   - Manages audio chunks and processing state
+   - Provides smart audio buffering
+   - Handles timing and segmentation of audio data
+
+### UI Layer
+
+1. **Main Window** (`ui/window.py`):
+   - Provides the primary user interface
+   - Displays transcription text and status
+   - Manages language selection and mode controls
+   - Handles VAD settings UI
+
+2. **Dialog Components** (`ui/dialogs.py`):
+   - Implements model selection dialogs
+   - Provides settings management
+   - Displays progress indicators for downloads
+   - Manages configuration UI
+
+3. **Event Handling** (`ui/events.py`):
+   - Defines the EventHandler Protocol
+   - Manages keyboard shortcuts
+   - Handles clipboard operations
+   - Controls UI-initiated actions
+
+### Utility Layer
+
+1. **File Operations** (`utils/file_ops.py`):
+   - Manages transcript saving and loading
+   - Handles file system operations
+   - Provides timestamp-based filenames
+   - Lists transcript history
+
+2. **Silence Detection** (`utils/silence_detection.py`):
+   - Implements multiple VAD methods:
+     - Basic RMS-based detection
+     - WebRTC VAD for better accuracy
+     - Silero VAD for best quality
+   - Provides unified interface for all detection methods
+   - Handles fallbacks between detection methods
+
+3. **Lifecycle Management** (`utils/lifecycle.py`):
+   - Defines Component and Closeable interfaces
+   - Standardizes start/stop/close operations
+   - Ensures proper resource cleanup
+   - Provides context manager support
+
+4. **Logging** (`utils/logging.py`):
+   - Configures application-wide logging
+   - Handles log rotation and formatting
+   - Logs performance metrics
+   - Provides debugging support
+
+5. **Clipboard** (`utils/clipboard.py`):
+   - Handles clipboard operations
+   - Provides error handling for clipboard actions
+
+### Configuration
+
+The **Config** system (`config.py`):
+- Provides a centralized configuration with nested components
+- Uses Pydantic for validation and typing
+- Includes settings for:
+  - Audio (sample rate, chunk size, VAD parameters)
+  - Transcription (model, language)
+  - UI (colors, update intervals)
+  - Hotkeys (keyboard shortcuts)
+
+### Communication Patterns
+
+1. **Event Handling**:
+   - The UI registers handlers with the service
+   - The service implements the EventHandler protocol
+   - UI components trigger callbacks on user actions
+   - The service updates UI through direct method calls
+
+2. **Threading Model**:
+   - UI runs on the main thread
+   - Audio processing runs on background threads
+   - Worker queues ensure thread safety
+   - Animation uses tkinter timers for thread safety
+
+3. **Component Lifecycle**:
+   - Components implement standardized interfaces
+   - Proper resource acquisition and release
+   - Consistent start/stop/close methods
+   - Context manager support for resource management
 
 ## Development Workflow
 

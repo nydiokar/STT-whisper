@@ -8,7 +8,7 @@ import time
 import pyaudio
 from typing import Generator
 from voice_input_service.core.transcription import TranscriptionEngine
-from voice_input_service.core.config import TranscriptionConfig
+from voice_input_service.config import TranscriptionConfig
 
 @pytest.fixture(autouse=True)
 def cleanup_temp_wav_files() -> Generator[None, None, None]:

@@ -1,7 +1,7 @@
 from __future__ import annotations
 import os
 from pathlib import Path
-from typing import Optional, Union
+from typing import Optional, Union, Literal
 
 import pyaudio
 from pydantic import BaseModel, Field, field_validator
@@ -13,10 +13,16 @@ class AudioConfig(BaseModel):
     channels: int = Field(1, description="Number of audio channels (1=mono, 2=stereo)")
     format_type: int = Field(pyaudio.paInt16, description="Audio format type")
     device_index: Optional[int] = Field(None, description="Input device index, None for default")
-    silence_threshold: float = Field(0.04, description="RMS threshold for silence detection")
+    silence_threshold: float = Field(0.04, description="RMS threshold for silence detection (0.0-1.0)")
     min_silence_length: float = Field(2.5, description="Minimum silence length in seconds")
     min_audio_length: int = Field(32000, description="Minimum audio length in samples before processing")
     min_process_interval: float = Field(0.5, description="Minimum interval between processing audio chunks")
+    
+    # Voice Activity Detection settings
+    vad_mode: Literal["basic", "webrtc", "silero"] = Field("basic", description="VAD mode (basic, webrtc, silero)")
+    vad_aggressiveness: int = Field(2, description="WebRTC VAD aggressiveness (0-3)")
+    vad_threshold: float = Field(0.5, description="Silero VAD threshold (0.0-1.0)")
+    silence_duration: float = Field(0.5, description="Wait for silence before processing (seconds)")
     
     @field_validator('sample_rate')
     @classmethod
@@ -31,6 +37,35 @@ class AudioConfig(BaseModel):
     def validate_channels(cls, v: int) -> int:
         if v not in [1, 2]:
             raise ValueError(f"Channels must be 1 (mono) or 2 (stereo), got {v}")
+        return v
+    
+    @field_validator('vad_mode')
+    @classmethod
+    def validate_vad_mode(cls, v: str) -> str:
+        valid_modes = ["basic", "webrtc", "silero"]
+        if v not in valid_modes:
+            raise ValueError(f"VAD mode must be one of {valid_modes}, got {v}")
+        return v
+    
+    @field_validator('vad_aggressiveness')
+    @classmethod
+    def validate_vad_aggressiveness(cls, v: int) -> int:
+        if v < 0 or v > 3:
+            raise ValueError(f"VAD aggressiveness must be between 0 and 3, got {v}")
+        return v
+    
+    @field_validator('vad_threshold')
+    @classmethod
+    def validate_vad_threshold(cls, v: float) -> float:
+        if v < 0.0 or v > 1.0:
+            raise ValueError(f"VAD threshold must be between 0.0 and 1.0, got {v}")
+        return v
+    
+    @field_validator('silence_threshold')
+    @classmethod
+    def validate_silence_threshold(cls, v: float) -> float:
+        if v < 0.0 or v > 1.0:
+            raise ValueError(f"Silence threshold must be between 0.0 and 1.0, got {v}")
         return v
 
 class TranscriptionConfig(BaseModel):
@@ -47,6 +82,9 @@ class TranscriptionConfig(BaseModel):
     use_cpp: bool = Field(True, description="Whether to use whisper.cpp instead of Python Whisper")
     whisper_cpp_path: str = Field("C:\\Users\\Cicada38\\Projects\\whisper.cpp\\build\\bin\\Release\\whisper-cli.exe", description="Path to the whisper.cpp executable")
     ggml_model_path: Optional[str] = Field(None, description="Path to specific GGML model file")
+    
+    # Continuous mode setting
+    continuous_mode: bool = Field(False, description="Whether to use continuous transcription mode")
     
     @field_validator('model_name')
     @classmethod

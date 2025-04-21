@@ -8,7 +8,7 @@ import pyaudio
 from typing import Generator
 from pydantic import ValidationError
 
-from voice_input_service.core.config import (
+from voice_input_service.config import (
     AudioConfig, 
     TranscriptionConfig, 
     UIConfig, 

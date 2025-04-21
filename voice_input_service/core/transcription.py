@@ -1,7 +1,9 @@
 from __future__ import annotations
 import os
 import logging
-from typing import Dict, Any
+import sys
+import traceback
+from typing import Dict, Any, Optional
 import numpy as np
 
 
@@ -20,6 +22,9 @@ except ImportError:
 # Import our whisper.cpp implementation
 from voice_input_service.core.whisper_cpp import transcribe as whisper_cpp_transcribe
 
+class ModelError(Exception):
+    """Exception raised for model loading or initialization errors."""
+    pass
 
 class TranscriptionEngine:
     """Engine responsible for speech-to-text transcription."""
@@ -48,6 +53,8 @@ class TranscriptionEngine:
         self.model = None
         self.use_cpp = use_cpp
         self.whisper_cpp_path = whisper_cpp_path
+        self.model_file_path = None  # Initialize to avoid attribute errors
+        self.initialization_error = None  # Store initialization errors
         
         # Force use_cpp if whisper is not available
         if not WHISPER_AVAILABLE and not use_cpp:
@@ -72,20 +79,44 @@ class TranscriptionEngine:
         """Load the Whisper model.
         
         Raises:
-            RuntimeError: If model loading fails
+            ModelError: If model loading fails
         """
         if self.use_cpp:
-            # No need to load model for whisper.cpp - it's handled by the subprocess
+            # Verify whisper.cpp executable exists
+            if not os.path.exists(self.whisper_cpp_path):
+                error_msg = f"Whisper.cpp executable not found at: {self.whisper_cpp_path}"
+                self.logger.error(error_msg)
+                self.initialization_error = error_msg
+                raise ModelError(error_msg)
+                
+            # Verify we have a model file specified
+            if not hasattr(self, 'model_file_path') or not self.model_file_path:
+                error_msg = "No GGML model file specified for whisper.cpp"
+                self.logger.error(error_msg)
+                self.initialization_error = error_msg
+                raise ModelError(error_msg)
+                
+            # Verify the model file exists
+            if not os.path.exists(self.model_file_path):
+                error_msg = f"GGML model file not found at: {self.model_file_path}"
+                self.logger.error(error_msg)
+                self.initialization_error = error_msg
+                raise ModelError(error_msg)
+                
+            # All checks passed, whisper.cpp is ready
             return
             
         if self.model is not None:
             return  # Model already loaded
             
         if not WHISPER_AVAILABLE:
-            raise RuntimeError(
+            error_msg = (
                 "Failed to load whisper model: Python Whisper is not installed. "
                 "Please install with 'pip install openai-whisper' or use whisper.cpp."
             )
+            self.logger.error(error_msg)
+            self.initialization_error = error_msg
+            raise ModelError(error_msg)
             
         self.logger.info(f"Loading model '{self.model_name}' on device '{self.device}'...")
         try:
@@ -97,9 +128,19 @@ class TranscriptionEngine:
                 device=self.device,
             )
             self.logger.info(f"Successfully loaded model '{self.model_name}'")
+            self.initialization_error = None  # Clear any previous errors
         except Exception as e:
-            self.logger.error(f"Failed to load model '{self.model_name}': {e}")
-            raise RuntimeError(f"Failed to load model: {e}") from e
+            error_msg = f"Failed to load model '{self.model_name}': {e}"
+            self.logger.error(error_msg)
+            self.initialization_error = error_msg
+            
+            # Add traceback for debugging
+            exc_type, exc_value, exc_traceback = sys.exc_info()
+            if exc_traceback:
+                tb_lines = traceback.format_exception(exc_type, exc_value, exc_traceback)
+                self.logger.debug("".join(tb_lines))
+                
+            raise ModelError(error_msg) from e
 
     def transcribe(self, audio: bytes, prompt: str = "") -> Dict[str, Any]:
         """Transcribe audio to text.
@@ -110,55 +151,87 @@ class TranscriptionEngine:
 
         Returns:
             Transcription result
+            
+        Raises:
+            ModelError: If transcription fails due to model issues
         """
-        # Log length of audio for debugging
-        audio_data_np = np.frombuffer(audio, dtype=np.int16)
-        audio_duration = len(audio_data_np) / 16000  # Whisper uses 16kHz
-        self.logger.debug(f"Processing {audio_duration:.1f}s of audio")
-        
-        if self.use_cpp:
-            # Use whisper.cpp implementation
-            self.logger.debug("Using whisper.cpp for transcription")
+        try:
+            # Log length of audio for debugging
+            audio_data_np = np.frombuffer(audio, dtype=np.int16)
+            audio_duration = len(audio_data_np) / 16000  # Whisper uses 16kHz
+            self.logger.debug(f"Processing {audio_duration:.1f}s of audio")
             
-            # Get the model file path from config if specified
-            model_file = getattr(self, 'model_file_path', None)
-            
-            # If no model file is specified, log error and return
-            if not model_file:
-                error_msg = "No GGML model file specified for whisper.cpp. Update your configuration."
-                self.logger.error(error_msg)
-                return {"text": error_msg}
+            if self.use_cpp:
+                # Use whisper.cpp implementation
+                self.logger.debug("Using whisper.cpp for transcription")
                 
-            # Log which model we're using
-            model_name = os.path.basename(model_file)
-            self.logger.info(f"Transcribing with model: {model_name}")
+                # Make sure we have a valid model file
+                if not hasattr(self, 'model_file_path') or not self.model_file_path:
+                    error_msg = "No GGML model file specified for whisper.cpp. Update your configuration."
+                    self.logger.error(error_msg)
+                    raise ModelError(error_msg)
                 
-            # Call whisper.cpp
-            text = whisper_cpp_transcribe(
-                audio_data=audio,
-                model_path=model_file,
-                main_path=self.whisper_cpp_path,
-                language=self.language
-            )
-            
-            # Return in a format similar to the Whisper Python output
-            return {"text": text.strip()}
-        else:
-            # Use Python Whisper implementation
-            # Ensure model is loaded before transcribing
-            if self.model is None:
-                self._load_model()
+                # Verify the model file and whisper.cpp executable exist
+                if not os.path.exists(self.model_file_path):
+                    error_msg = f"GGML model file not found: {self.model_file_path}"
+                    self.logger.error(error_msg)
+                    raise ModelError(error_msg)
                 
-            self.logger.info(f"Transcribing with Python Whisper model: {self.model_name}")
-            
-            options = dict(language=self.language)
-            if prompt:
-                options["initial_prompt"] = prompt
+                if not os.path.exists(self.whisper_cpp_path):
+                    error_msg = f"whisper.cpp executable not found: {self.whisper_cpp_path}"
+                    self.logger.error(error_msg)
+                    raise ModelError(error_msg)
+                    
+                # Log which model we're using
+                model_name = os.path.basename(self.model_file_path)
+                self.logger.info(f"Transcribing with model: {model_name}")
+                    
+                # Call whisper.cpp
+                text = whisper_cpp_transcribe(
+                    audio_data=audio,
+                    model_path=self.model_file_path,
+                    main_path=self.whisper_cpp_path,
+                    language=self.language
+                )
+                
+                # Check if the response indicates an error
+                if text and text.startswith("Error:"):
+                    self.logger.error(f"Whisper.cpp transcription error: {text}")
+                    raise ModelError(f"Transcription failed: {text}")
+                
+                # Return in a format similar to the Whisper Python output
+                return {"text": text.strip()}
+            else:
+                # Use Python Whisper implementation
+                # Ensure model is loaded before transcribing
+                if self.model is None:
+                    self._load_model()
+                    
+                self.logger.info(f"Transcribing with Python Whisper model: {self.model_name}")
+                
+                options = dict(language=self.language)
+                if prompt:
+                    options["initial_prompt"] = prompt
 
-            # Convert bytes to float32 array that Whisper expects
-            audio_data = audio_data_np.astype(np.float32) / 32768.0
+                # Convert bytes to float32 array that Whisper expects
+                audio_data = audio_data_np.astype(np.float32) / 32768.0
 
-            return self.model.transcribe(audio_data, **options)
+                return self.model.transcribe(audio_data, **options)
+                
+        except ModelError:
+            # Re-raise ModelError without wrapping
+            raise
+        except Exception as e:
+            # Capture and log the full exception traceback
+            exc_type, exc_value, exc_traceback = sys.exc_info()
+            if exc_traceback:
+                tb_lines = traceback.format_exception(exc_type, exc_value, exc_traceback)
+                self.logger.error("Transcription error: " + "".join(tb_lines))
+            else:
+                self.logger.error(f"Transcription error: {e}")
+                
+            # Wrap in ModelError for consistent error handling
+            raise ModelError(f"Transcription failed: {e}") from e
 
     def get_available_languages(self) -> Dict[str, str]:
         """Get available languages for transcription.
@@ -175,21 +248,31 @@ class TranscriptionEngine:
             Dictionary with model information
         """
         if self.use_cpp:
+            model_path = getattr(self, 'model_file_path', None)
+            model_exists = model_path and os.path.exists(model_path)
+            
             return {
                 "name": self.model_name,
                 "device": "cpp",
-                "loaded": True,
-                "type": "whisper.cpp"
+                "loaded": model_exists,
+                "type": "whisper.cpp",
+                "path": model_path,
+                "error": self.initialization_error
             }
             
         if not self.model:
-            return {"status": "not_loaded"}
+            return {
+                "status": "not_loaded", 
+                "name": self.model_name,
+                "error": self.initialization_error
+            }
             
         info = {
             "name": self.model_name,
             "device": self.device,
             "loaded": bool(self.model),
-            "type": "whisper-python"
+            "type": "whisper-python",
+            "error": self.initialization_error
         }
         
         if hasattr(self.model, "dims"):
@@ -226,8 +309,18 @@ class TranscriptionEngine:
         
         Args:
             model_file_path: Path to the model file
+            
+        Raises:
+            ModelError: If the model file doesn't exist
         """
+        if not os.path.exists(model_file_path):
+            error_msg = f"Model file not found: {model_file_path}"
+            self.logger.error(error_msg)
+            self.initialization_error = error_msg
+            raise ModelError(error_msg)
+            
         self.model_file_path = model_file_path
+        
         # Add clear message about which model file is being used
         model_filename = os.path.basename(model_file_path)
         model_size_mb = os.path.getsize(model_file_path) / (1024 * 1024)
@@ -250,3 +343,43 @@ class TranscriptionEngine:
                     if lang in LANGUAGES or lang in TO_LANGUAGE_CODE:
                         self.language = lang
                         self.logger.debug(f"Detected language from model: {lang}")
+
+    def test_model(self) -> Dict[str, Any]:
+        """Test if the model can be loaded and is ready for transcription.
+        
+        Returns:
+            Dictionary with test results including success status and error message if any
+        """
+        result = {
+            "success": False,
+            "error": None,
+            "model_name": self.model_name,
+            "type": "whisper.cpp" if self.use_cpp else "whisper-python"
+        }
+        
+        try:
+            if self.use_cpp:
+                # For whisper.cpp, check if the model file and executable exist
+                if not hasattr(self, 'model_file_path') or not self.model_file_path:
+                    raise ModelError("No GGML model file specified for whisper.cpp")
+                
+                if not os.path.exists(self.model_file_path):
+                    raise ModelError(f"GGML model file not found: {self.model_file_path}")
+                
+                if not os.path.exists(self.whisper_cpp_path):
+                    raise ModelError(f"whisper.cpp executable not found: {self.whisper_cpp_path}")
+                
+                result["success"] = True
+                result["model_path"] = self.model_file_path
+                result["whisper_cpp_path"] = self.whisper_cpp_path
+            else:
+                # For Python Whisper, try loading the model
+                self._load_model()
+                result["success"] = True
+                result["device"] = self.device
+        except Exception as e:
+            result["success"] = False
+            result["error"] = str(e)
+            self.logger.error(f"Model test failed: {e}")
+            
+        return result

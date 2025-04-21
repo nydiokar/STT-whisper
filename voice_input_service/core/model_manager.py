@@ -10,7 +10,7 @@ from typing import Optional, List, Dict, Any, Callable
 
 from voice_input_service.ui.dialogs import ModelSelectionDialog, DownloadProgressDialog
 from voice_input_service.core.transcription import TranscriptionEngine
-from voice_input_service.core.config import Config
+from voice_input_service.config import Config
 
 class ModelManager:
     """Manages Whisper model selection, verification, and downloading."""

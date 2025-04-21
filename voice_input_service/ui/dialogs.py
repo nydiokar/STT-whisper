@@ -7,7 +7,7 @@ import threading
 import time
 from typing import Optional, Dict, Any, List, Callable
 
-from voice_input_service.core.config import Config
+from voice_input_service.config import Config
 
 class ModelSelectionDialog:
     """Dialog for model selection when a model is missing."""

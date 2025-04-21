@@ -9,7 +9,7 @@ This document provides API-level documentation for the Voice Input Service, deta
 The main service class that orchestrates all components.
 
 ```python
-class VoiceInputService(EventHandler):
+class VoiceInputService(EventHandler, Closeable):
     def __init__(self, config: Config, ui: TranscriptionUI, transcriber: TranscriptionEngine) -> None:
         """Initialize service components."""
         
@@ -49,6 +49,9 @@ class VoiceInputService(EventHandler):
         
     def _on_transcription_result(self, text: str) -> None:
         """Handle transcription result with mode-specific behavior."""
+        
+    def close(self) -> None:
+        """Clean up all resources properly."""
 ```
 
 ### TranscriptionEngine
@@ -146,6 +149,209 @@ class AudioProcessor:
         """
 ```
 
+### TranscriptionWorker
+
+Handles audio processing in a background thread with VAD support.
+
+```python
+class TranscriptionWorker(Component):
+    def __init__(
+        self,
+        process_func: Callable[[bytes], Optional[str]],
+        on_result: Callable[[str], None],
+        min_audio_length: int = 32000,
+        vad_mode: Literal["basic", "webrtc", "silero"] = "silero",
+        vad_aggressiveness: int = 3,
+        vad_threshold: float = 0.5,
+        silence_duration: float = 0.5,
+        sample_rate: int = 16000
+    ) -> None:
+        """Initialize the worker with VAD settings."""
+        
+    def start(self) -> bool:
+        """Start the worker thread.
+        
+        Returns:
+            bool: True if started successfully
+        """
+        
+    def stop(self) -> None:
+        """Stop the worker thread."""
+        
+    def close(self) -> None:
+        """Clean up resources."""
+        
+    def add_audio(self, data: bytes) -> None:
+        """Add audio data to the processing queue.
+        
+        Args:
+            data: Audio data to process
+        """
+        
+    def has_recent_audio(self) -> bool:
+        """Check if audio was received recently.
+        
+        Returns:
+            bool: True if audio was received within silence_duration
+        """
+        
+    def update_vad_settings(
+        self,
+        mode: Optional[str] = None,
+        aggressiveness: Optional[int] = None,
+        threshold: Optional[float] = None
+    ) -> None:
+        """Update VAD settings.
+        
+        Args:
+            mode: VAD mode (basic, webrtc, silero)
+            aggressiveness: WebRTC aggressiveness (0-3)
+            threshold: Silero threshold (0.0-1.0)
+        """
+```
+
+## Utility Classes
+
+### SilenceDetector
+
+Voice activity detection utility with multiple detection methods.
+
+```python
+class SilenceDetector:
+    def __init__(
+        self, 
+        mode: Literal["basic", "webrtc", "silero"] = "basic",
+        sample_rate: int = 16000,
+        aggressiveness: int = 3,
+        threshold: float = 0.5,
+        silence_rms_threshold: int = 400
+    ) -> None:
+        """Initialize the silence detector.
+        
+        Args:
+            mode: Detection mode to use
+            sample_rate: Audio sample rate in Hz
+            aggressiveness: WebRTC aggressiveness (0-3)
+            threshold: Silero threshold (0.0-1.0)
+            silence_rms_threshold: RMS threshold for basic detection
+        """
+        
+    def is_silent(self, audio_data: bytes) -> bool:
+        """Determine if audio is silent using configured detector.
+        
+        Args:
+            audio_data: Raw audio bytes to analyze
+            
+        Returns:
+            bool: True if audio is silent, False if speech detected
+        """
+        
+    def update_settings(
+        self, 
+        mode: Optional[str] = None,
+        aggressiveness: Optional[int] = None,
+        threshold: Optional[float] = None,
+        silence_threshold: Optional[int] = None
+    ) -> None:
+        """Update detector settings.
+        
+        Args:
+            mode: New detection mode
+            aggressiveness: New WebRTC aggressiveness
+            threshold: New Silero threshold
+            silence_threshold: New RMS threshold for basic detection
+        """
+```
+
+### Clipboard Utilities
+
+```python
+def copy_to_clipboard(text: str) -> bool:
+    """Copy text to system clipboard.
+    
+    Args:
+        text: Text to copy to clipboard
+        
+    Returns:
+        bool: True if successful, False otherwise
+    """
+```
+
+### Lifecycle Interfaces
+
+```python
+class Closeable(ABC):
+    """Interface for objects that need explicit cleanup."""
+    
+    @abstractmethod
+    def close(self) -> None:
+        """Clean up resources."""
+        
+    def __enter__(self):
+        """Context manager entry."""
+        return self
+        
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit."""
+        self.close()
+
+class Component(Closeable):
+    """Base interface for components with standardized lifecycle."""
+    
+    @abstractmethod
+    def start(self) -> bool:
+        """Start the component.
+        
+        Returns:
+            bool: True if started successfully, False otherwise
+        """
+        
+    @abstractmethod
+    def stop(self) -> None:
+        """Stop the component."""
+        
+    def restart(self) -> bool:
+        """Restart the component.
+        
+        Returns:
+            bool: True if restarted successfully, False otherwise
+        """
+```
+
+### Event Handling
+
+The application uses a protocol-based event handling system that enables clear communication between components:
+
+```python
+class EventHandler(Protocol):
+    """Protocol for event handlers."""
+    def start_recording(self) -> bool: ...
+    def stop_recording(self) -> str: ...
+    def save_transcript(self) -> None: ...
+    def clear_transcript(self) -> None: ...
+```
+
+The service implements this protocol and the UI components register callbacks:
+
+```python
+# In service initialization
+def _setup_ui_events(self) -> None:
+    """Setup UI event callbacks."""
+    # Register callbacks with the UI
+    self.ui.set_continuous_mode_handler(self._toggle_continuous_mode)
+    self.ui.set_language_handler(self._change_language)
+
+# In UI implementation
+def set_continuous_mode_handler(self, handler: Callable[[bool], None]) -> None:
+    """Register handler for continuous mode changes."""
+    self._continuous_mode_handler = handler
+```
+
+This approach provides:
+1. Type-safe event handling with clear interfaces
+2. Direct method calls for better performance
+3. Simple dependency management through handler registration
+
 ## Configuration Classes
 
 ### Config
@@ -178,7 +384,9 @@ class AudioConfig(BaseModel):
     sample_rate: int = Field(16000, description="Audio sample rate")
     chunk_size: int = Field(1024, description="Audio chunk size")
     channels: int = Field(1, description="Number of audio channels")
-    silence_threshold: float = Field(500.0, description="RMS threshold for silence")
+    vad_mode: str = Field("silero", description="Voice activity detection mode")
+    vad_aggressiveness: int = Field(3, description="WebRTC VAD aggressiveness")
+    vad_threshold: float = Field(0.5, description="Silero VAD threshold")
     device_index: Optional[int] = Field(None, description="Audio device index")
 ```
 

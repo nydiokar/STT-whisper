@@ -2,7 +2,7 @@ import pytest
 from unittest.mock import Mock, patch, create_autospec, ANY
 import tkinter as tk
 from voice_input_service.core.model_manager import ModelManager
-from voice_input_service.core.config import Config
+from voice_input_service.config import Config
 
 @pytest.fixture
 def mock_ui_root():

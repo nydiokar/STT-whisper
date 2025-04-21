@@ -4,7 +4,7 @@ from unittest.mock import Mock, patch
 import pyaudio
 import numpy as np
 from voice_input_service.core.audio import AudioRecorder
-from voice_input_service.core.config import AudioConfig
+from voice_input_service.config import AudioConfig
 import wave
 import os
 import tempfile
