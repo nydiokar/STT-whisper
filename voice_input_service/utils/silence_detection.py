@@ -122,13 +122,20 @@ class SilenceDetector:
             self.logger.error(f"Error during Silero VAD processing: {e}", exc_info=True)
             return False # Fail safe: assume not silent on error
 
-    def update_settings(self, threshold: Optional[float] = None) -> None:
-        """Update Silero VAD settings.
+    def update_settings(self, mode: Optional[str] = None, threshold: Optional[float] = None) -> None:
+        """Update VAD settings.
         
         Args:
+            mode: New VAD mode (currently ignored as only Silero is implemented)
             threshold: New Silero threshold (0.0-1.0)
         """
         changed = False
+        # Mode change is ignored for now
+        # if mode is not None and mode != self.mode:
+        #     self.mode = mode
+        #     changed = True
+        #     self.logger.info(f"Updated VAD mode to: {self.mode}")
+
         if threshold is not None and threshold != self.vad_threshold:
             self.vad_threshold = threshold
             # Store in config object as well if needed for persistence via SettingsDialog

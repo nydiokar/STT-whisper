@@ -27,6 +27,9 @@ except ImportError:
 SILERO_MODEL = None
 SILERO_AVAILABLE = False
 
+# Define a sentinel object for the stop signal
+STOP_SIGNAL = object()
+
 class TranscriptionWorker(Component):
     """Manages threaded audio processing, VAD (Voice Activity Detection), and transcription.
     
@@ -42,7 +45,9 @@ class TranscriptionWorker(Component):
         process_func: Callable[[bytes], Optional[str]],
         on_result: Callable[[str], None],
         config: Config,
-        initial_continuous_mode: bool = False
+        initial_continuous_mode: bool = False,
+        completion_callback: Optional[Callable[[], None]] = None,
+        on_final_result: Optional[Callable[[str], None]] = None # Callback for final non-cont result
     ) -> None:
         """Initialize the worker.
         
@@ -51,12 +56,16 @@ class TranscriptionWorker(Component):
             on_result: Callback for when text is transcribed
             config: Application configuration
             initial_continuous_mode: Initial continuous mode state
+            completion_callback: Callback to call when the worker stops
+            on_final_result: Callback for the result of the final non-continuous chunk
         """
         self.logger = logging.getLogger("VoiceService.Worker")
         self.process_func = process_func
         self.on_result = on_result
         self.config = config
         self.continuous_mode = initial_continuous_mode
+        self.completion_callback = completion_callback
+        self.on_final_result = on_final_result # Store final result callback
         
         # Extract settings from config
         self.min_audio_length = config.audio.min_audio_length
@@ -65,7 +74,8 @@ class TranscriptionWorker(Component):
         # State initialization
         self.running = False
         self.thread: Optional[threading.Thread] = None
-        self.audio_queue: queue.Queue[bytes] = queue.Queue()
+        # Queue can now hold bytes or the STOP_SIGNAL object or (STOP_SIGNAL, bytes)
+        self.audio_queue: queue.Queue[Union[bytes, object, tuple[object, bytes]]] = queue.Queue()
         
         # VAD configuration from config - no need to duplicate settings here
         # They'll all come from the config object
@@ -129,32 +139,42 @@ class TranscriptionWorker(Component):
         return True
     
     def stop(self) -> None:
-        """Stop the worker thread."""
+        """Stop the worker thread asynchronously by setting the running flag."""
         with self.buffer_lock:
             if not self.running:
                 return
-                
-            self.logger.debug("Stopping transcription worker")
+
+            self.logger.debug("Signaling transcription worker to stop...")
             self.running = False
-        
-        # Wait for thread to finish
-        if self.thread and self.thread.is_alive():
-            current_thread = threading.current_thread()
-            if current_thread is not self.thread:
-                self.thread.join(timeout=2.0)  # Wait up to 2 seconds
-                
-        self.thread = None
-        
-        # Clear any pending audio
+            # Do NOT join the thread here - let the _worker loop exit gracefully
+            # and trigger the completion callback.
+
+        # Clear the queue immediately to prevent processing old items after stop signal
+        # self._clear_queue() # Clearing happens naturally in signal_stop now
+
+    def signal_stop(self, final_chunk: Optional[bytes] = None) -> None:
+        """Signals the worker to stop by putting a signal in the queue."""
+        with self.buffer_lock:
+            if not self.running:
+                return
+            self.logger.debug(f"Putting stop signal into queue. Final chunk provided: {final_chunk is not None}")
+            # Put stop signal, potentially with final chunk data
+            if final_chunk:
+                self.audio_queue.put((STOP_SIGNAL, final_chunk))
+            else:
+                self.audio_queue.put(STOP_SIGNAL)
+            # Don't set self.running = False here, let the worker loop handle it
+
+    def _clear_queue(self) -> None:
+        """Clear the audio queue."""
         while not self.audio_queue.empty():
             try:
                 self.audio_queue.get_nowait()
                 self.audio_queue.task_done()
             except queue.Empty:
                 break
-                
-        self.logger.info("Transcription worker stopped")
-    
+        self.logger.debug("Audio queue cleared.")
+
     def close(self) -> None:
         """Clean up resources."""
         self.stop()
@@ -185,17 +205,39 @@ class TranscriptionWorker(Component):
         
         buffer = bytearray()
         last_speech_time = time.time()
-        
-        while True:
-            # Check if we should exit - use local variable to avoid race conditions
+        should_stop = False
+        final_chunk_to_process: Optional[bytes] = None
+
+        while not should_stop:
+            # Check running flag first (can be set by old stop method, though unlikely now)
             with self.buffer_lock:
                 if not self.running:
-                    break
+                    should_stop = True
+                    break # Exit loop immediately if running flag is false
             
             try:
-                # Get audio from queue with timeout to prevent blocking indefinitely
+                # Get audio or signal from queue with timeout
                 try:
-                    audio_chunk = self.audio_queue.get(timeout=0.1)
+                    item = self.audio_queue.get(timeout=0.1)
+
+                    # --- Handle Stop Signal --- 
+                    if item is STOP_SIGNAL:
+                        self.logger.debug("Stop signal received in worker queue.")
+                        should_stop = True
+                        # Don't process regular buffer on plain stop signal
+                        buffer.clear() 
+                        continue # Go to loop end check
+                    elif isinstance(item, tuple) and item[0] is STOP_SIGNAL:
+                        self.logger.debug("Stop signal with final chunk received.")
+                        should_stop = True
+                        final_chunk_to_process = item[1]
+                        # Also clear any existing buffered audio
+                        buffer.clear()
+                        continue # Go to loop end check
+                    # --- End Stop Signal Handling ---
+                    
+                    # --- Regular Audio Chunk Handling --- 
+                    audio_chunk = item # It must be bytes if not a stop signal
                     
                     # Skip processing if chunk is too small
                     if len(audio_chunk) < 1600:  # ~50ms at 16kHz
@@ -273,8 +315,50 @@ class TranscriptionWorker(Component):
                 # Clear buffer on error
                 with self.buffer_lock:
                     buffer.clear()
-                
-        self.logger.info("Worker thread stopped")
+                should_stop = True # Stop loop on error
+
+        # --- Worker Loop Finished --- 
+        self.logger.info("Worker thread loop finished.")
+        self.running = False # Ensure running is false
+        self.thread = None # Clear thread reference
+
+        # --- Process Final Non-Continuous Chunk (if any) --- 
+        final_result_text: Optional[str] = None
+        if final_chunk_to_process:
+            self.logger.info(f"Processing final non-continuous chunk ({len(final_chunk_to_process)/1024:.1f} KB)...")
+            if len(final_chunk_to_process) >= self.min_chunk_size:
+                try:
+                    # Use the main process_func
+                    final_result_text = self.process_func(final_chunk_to_process)
+                    if final_result_text and self.on_final_result:
+                        self.logger.debug(f"Sending final non-continuous result: {final_result_text}")
+                        self.on_final_result(final_result_text)
+                    elif not final_result_text:
+                        self.logger.warning("Final non-continuous chunk processing yielded no text.")
+                        # Still call final result callback with empty string? Or None?
+                        # Let's call it with empty string to signal completion.
+                        if self.on_final_result:
+                            self.on_final_result("") 
+                except Exception as e:
+                    self.logger.error(f"Error processing final non-continuous chunk: {e}")
+                    # Call final result callback with empty string on error?
+                    if self.on_final_result:
+                        self.on_final_result("") 
+            else:
+                self.logger.info("Skipping final non-continuous chunk processing (too short).")
+                # Call final result callback with empty string?
+                if self.on_final_result:
+                    self.on_final_result("")
+        # --- End Final Chunk Processing ---
+
+        # Call completion callback if provided, after the loop and final processing finishes
+        if self.completion_callback:
+            self.logger.debug("Calling completion callback.")
+            try:
+                self.completion_callback()
+            except Exception as e:
+                self.logger.error(f"Error in worker completion callback: {e}")
+        # --- End Worker Completion ---
     
     def _process_chunk(self, audio_data: bytes) -> None:
         """Process a chunk of audio data."""
@@ -310,7 +394,6 @@ class TranscriptionWorker(Component):
             
         # Get VAD settings from config
         vad_mode = self.config.audio.vad_mode
-        vad_aggressiveness = self.config.audio.vad_aggressiveness
         vad_threshold = self.config.audio.vad_threshold
         
         # Set silence duration based on whether we're in continuous mode
@@ -325,8 +408,7 @@ class TranscriptionWorker(Component):
         # Update the detector with new settings
         if hasattr(self, 'silence_detector'):
             self.silence_detector.update_settings(
-                mode=vad_mode, 
-                aggressiveness=vad_aggressiveness,
+                mode=vad_mode,
                 threshold=vad_threshold
             )
             

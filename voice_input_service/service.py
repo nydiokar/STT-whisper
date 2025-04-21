@@ -6,6 +6,11 @@ import logging
 import numpy as np
 import tkinter as tk
 from tkinter import messagebox
+import uuid # Import uuid for generating IDs
+from datetime import datetime # Import datetime for formatting
+import json # Import json for saving metadata
+import os # Import os for path manipulation
+import queue # Import queue for thread-safe communication
 
 # Import core components
 from voice_input_service.core.audio import AudioRecorder
@@ -17,6 +22,7 @@ from voice_input_service.config import Config
 from voice_input_service.utils.clipboard import copy_to_clipboard
 from voice_input_service.utils.lifecycle import Component, Closeable
 from voice_input_service.utils.text_processor import TextProcessor
+from voice_input_service.core.chunk_buffer import ChunkMetadataManager
 
 class VoiceInputService(EventHandler, Closeable):
     """Main service for voice transcription."""
@@ -55,6 +61,7 @@ class VoiceInputService(EventHandler, Closeable):
         # Initialize utility classes - each with a clear responsibility
         self.transcript_manager = TranscriptManager()
         self.text_processor = TextProcessor(min_words=2)
+        self.metadata_manager = ChunkMetadataManager()
         
         # State variables
         self.recording = False
@@ -66,6 +73,10 @@ class VoiceInputService(EventHandler, Closeable):
         self.state_lock = threading.RLock()
         self.stop_timer = None
         
+        # --- Queue for thread-safe UI updates from worker --- 
+        self.ui_queue = queue.Queue()
+        # --- End Queue --- 
+        
         # Test the transcription model before starting
         self._verify_transcription_model()
         
@@ -74,7 +85,9 @@ class VoiceInputService(EventHandler, Closeable):
             process_func=self._process_audio_chunk,
             on_result=self._on_transcription_result,
             config=self.config,
-            initial_continuous_mode=self.continuous_mode # Pass initial state
+            initial_continuous_mode=self.continuous_mode, # Pass initial state
+            completion_callback=self._on_worker_stopped, # Add this callback
+            on_final_result=self._on_final_result      # Add final result callback
         )
         
         # Set up UI events
@@ -86,7 +99,16 @@ class VoiceInputService(EventHandler, Closeable):
         
         # Set config in UI and register for settings changes
         self.ui.set_config(self.config)
+        # Pass the queue to the UI
+        self.ui.set_service_queue(self.ui_queue)
+        # Pass the finalize stop handler to the UI
+        self.ui.set_finalize_stop_handler(self._finalize_stop) 
         self.ui.on_settings_changed = self._on_settings_changed
+        # --- Sync UI Checkbox with Initial Config State ---
+        if hasattr(self.ui, 'continuous_var'):
+            self.ui.continuous_var.set(self.continuous_mode)
+            self.logger.debug(f"Initial UI checkbox state set to: {self.continuous_mode}")
+        # --- End Sync ---
         
         self.logger.info(f"Initializing VoiceInputService instance, id(self): {id(self)}")
         self.accumulated_text = ""
@@ -305,78 +327,92 @@ class VoiceInputService(EventHandler, Closeable):
             
             return True
     
-    def stop_recording(self, cancel_timer: bool = True) -> str:
-        """Stop audio recording, process final chunk, update state/UI, and return text."""
-        final_text_to_return = ""
+    def stop_recording(self, cancel_timer: bool = True) -> None:
+        """Initiates the recording stop sequence asynchronously."""
+        # Returns None immediately, final actions happen in _finalize_stop
         with self.state_lock:
-            if not self.recording: return "" 
-            self.logger.info(f"Stopping recording... Instance: {id(self)}")
+            if not self.recording:
+                self.logger.debug("Stop recording called but not recording.")
+                return
             
-            # Cancel any pending stop timer
+            self.logger.info(f"Initiating stop sequence... Instance: {id(self)}")
+            
+            # Cancel any pending stop timer (e.g., from natural pause)
             if cancel_timer and self.stop_timer:
                 self.stop_timer.cancel()
                 self.stop_timer = None
             
-            # Stop recording flag first
+            # Set recording flag to prevent further processing via _on_audio_data
             self.recording = False
+            # --- Stop animation IMMEDIATELY --- 
+            self.ui._stop_recording_animation()
+            # ---------------------------------- 
             
-            # Stop audio recorder and get final data
+            # Stop the audio recorder immediately
             audio_data = self.recorder.stop()
             
-            # Show processing status
-            self.ui.update_status(False)
+            # Update UI to show processing is happening
+            self.ui.update_status(False) # Argument might not be needed if update_status_color is used
+            # self.ui._stop_recording_animation() # Moved earlier
             self.ui.update_status_color("processing")
+            self.logger.debug("UI set to processing state.")
 
-            # --- Conditional Final Chunk Processing ---
+            # --- Handle Non-Continuous Mode Final Chunk --- 
+            # Process this synchronously *before* telling the worker to stop,
+            # as the worker isn't used for non-continuous mode transcription.
             if not self.continuous_mode:
-                # == Non-Continuous Mode: Process the entire recording once ==
-                self.logger.info("Non-continuous mode: Processing entire recording.")
+                self.logger.info("Non-continuous mode: Processing final audio chunk directly.")
                 final_chunk_text: Optional[str] = None
-                # Ensure accumulated text is clear before setting from final chunk
-                self.accumulated_text = "" 
-                if len(audio_data) > self.config.transcription.min_chunk_size: # Use configured min size
-                    self.logger.info(f"Starting final audio chunk processing ({len(audio_data)/1024:.1f} KB)...")
-                    start_time = time.time()
+                self.accumulated_text = "" # Clear previous before setting
+                if len(audio_data) > self.config.transcription.min_chunk_size:
+                    # This might still block briefly, but it's necessary for non-continuous
                     try:
-                        # Process the final chunk directly
                         final_chunk_text = self._process_audio_chunk(audio_data)
-                    finally:
-                        end_time = time.time()
-                        self.logger.info(f"Final audio chunk processing finished in {end_time - start_time:.2f} seconds.")
-
+                    except Exception as e:
+                        self.logger.error(f"Error processing final chunk in non-continuous mode: {e}")
+                        
                     if final_chunk_text:
-                        self.logger.debug("Setting accumulated text from final chunk.")
-                        # This IS the final text for non-continuous mode
                         self.accumulated_text = final_chunk_text
                     else:
-                        self.logger.warning("Final audio chunk processing yielded no text.")
+                        self.logger.warning("Non-continuous processing yielded no text.")
                 else:
-                    self.logger.info("Skipping final audio chunk processing (too short).")
+                    self.logger.info("Skipping non-continuous processing (audio too short).")
+            # --- End Non-Continuous Handling ---
+
+            # --- Signal Stop via Queue --- 
+            # Send None to the queue to signal graceful shutdown
+            # In non-continuous mode, send the final audio data for processing.
+            if not self.continuous_mode:
+                stop_signal_data = audio_data if len(audio_data) > self.config.transcription.min_chunk_size else b''
+                self.logger.info(f"Sending final non-continuous chunk ({len(stop_signal_data)} bytes) and stop signal to worker.")
+                self.worker.signal_stop(final_chunk=stop_signal_data)
             else:
-                # == Continuous Mode: Use incrementally built text ==
-                self.logger.info("Continuous mode: Skipping final chunk processing, using incremental results.")
-                # self.accumulated_text already holds the text from _on_transcription_result
-            # --- End Conditional Processing ---
-
-            # Stop the worker thread (important after deciding final text)
-            self.worker.stop()
-
-            # --- Update UI with the FINAL complete text ---
-            self.logger.debug(f"Updating UI with final text: '{self.accumulated_text}'")
-            self.ui.update_text(self.accumulated_text)
-            self.ui.update_word_count(len(self.accumulated_text.split()))
-
-            # Update UI to ready state
-            self.ui.update_status_color("ready")
+                self.logger.info("Sending stop signal to worker (continuous mode).")
+                self.worker.signal_stop(final_chunk=None)
+            # --- End Signal Stop --- 
             
-            final_text_to_return = self.accumulated_text
-            # --- End of state_lock block ---
+            # --- IMPORTANT: Remove old worker.stop() call --- 
+            # self.worker.stop() # Replaced by signal_stop via queue
             
-        self.logger.info("Recording stopped successfully.")
-        return final_text_to_return
+            # --- IMPORTANT: Remove final UI updates and return ---
+            # The rest of the logic (final UI update, setting status to ready)
+            # now happens in _finalize_stop, triggered by the worker callback.
+            # We return control to the UI thread immediately.
+            
+        # self.logger.info("Recording stop initiated.") # Logging moved to _finalize_stop
+        # Return immediately, do not return text here
     
     def _on_transcription_result(self, text: str) -> None:
         """Handle transcription result FROM THE WORKER during continuous mode."""
+        # --- Check if stopping --- 
+        # Immediately return if stop_recording has already set self.recording to False
+        # This prevents processing results that arrive after the stop sequence began.
+        with self.state_lock:
+            if not self.recording:
+                self.logger.debug("Ignoring transcription result received after stop signal.")
+                return
+        # --- End Check --- 
+
         # If not in continuous mode, this callback should ideally not be triggered by the worker,
         # but we add a check just in case.
         if not self.continuous_mode:
@@ -395,7 +431,26 @@ class VoiceInputService(EventHandler, Closeable):
         if not text: return
         text = self.text_processor.filter_hallucinations(text)
         if not text: return
-            
+
+        # --- Store Metadata (Placeholder Implementation) ---
+        current_time = time.time()
+        segment_id = f"seg_{uuid.uuid4().hex[:8]}" # Generate unique ID for this segment
+        dt_object = datetime.fromtimestamp(current_time)
+        timestamp_str = dt_object.strftime("%H:%M:%S.%f")[:-3] # Add milliseconds
+        date_str = dt_object.strftime("%Y-%m-%d")
+        placeholder_duration = 0.0 # Duration is unknown here
+
+        # Store using the metadata manager
+        self.metadata_manager.add_transcription(
+            chunk_id=segment_id, 
+            text=text, 
+            timestamp=timestamp_str, 
+            duration=placeholder_duration, 
+            date=date_str
+        )
+        self.logger.debug(f"Stored metadata for segment {segment_id}")
+        # --- End Metadata Storage ---
+
         # --- Update UI Incrementally (Continuous Mode) --- 
         # Append the new text chunk to the UI display
         # NOTE: This requires the UI method to handle appending or be called appropriately.
@@ -476,10 +531,37 @@ class VoiceInputService(EventHandler, Closeable):
         # Delegate to transcript manager
         file_path = self.transcript_manager.save_transcript(text_to_save)
         
+        # --- Save Metadata to JSON ---
+        metadata_saved = False
+        if file_path: # Proceed only if text save was successful
+            all_metadata = self.metadata_manager.get_all_metadata()
+            if all_metadata:
+                # Create a corresponding JSON filename
+                base_name = os.path.splitext(os.path.basename(file_path))[0]
+                dir_name = os.path.dirname(file_path)
+                json_filename = f"{base_name}_metadata.json"
+                json_filepath = os.path.join(dir_name, json_filename)
+                
+                try:
+                    with open(json_filepath, 'w', encoding='utf-8') as f:
+                        # Dump metadata values (list of dicts) sorted by timestamp maybe?
+                        # For now, dump the raw dictionary {segment_id: metadata_dict}
+                        json.dump(all_metadata, f, indent=2, ensure_ascii=False)
+                    self.logger.info(f"Metadata saved to: {json_filepath}")
+                    metadata_saved = True
+                except Exception as e:
+                    self.logger.error(f"Failed to save metadata JSON to {json_filepath}: {e}")
+            else:
+                self.logger.info("No metadata to save.")
+        # --- End Metadata JSON Save ---
+
         # Update UI based on result
         if file_path:
+            save_message = f"Saved to: {os.path.basename(file_path)}"
+            if metadata_saved:
+                save_message += f" (+ metadata JSON)"
             self.logger.info(f"Transcript saved to: {file_path}")
-            self.ui.update_status_text(f"Saved to: {file_path}")
+            self.ui.update_status_text(save_message)
         else:
             self.logger.error("Failed to save transcript")
             self.ui.update_status_text("Error saving transcript")
@@ -619,3 +701,42 @@ class VoiceInputService(EventHandler, Closeable):
         
         if not self.model_error_reported:
             self.ui.update_status_text(f"{change_type.capitalize()} updated")
+
+    # --- Asynchronous Stop Handling ---
+    def _on_worker_stopped(self) -> None:
+        """Callback executed by the worker thread when it has fully stopped."""
+        self.logger.debug("Worker completion callback triggered. Signaling UI via queue.")
+        # Send signal to UI thread via thread-safe queue
+        try:
+            self.ui_queue.put("WORKER_STOPPED")
+        except Exception as e:
+            # Log error if putting into queue fails (highly unlikely)
+            self.logger.error(f"Failed to put WORKER_STOPPED signal in UI queue: {e}")
+
+    def _finalize_stop(self) -> None:
+        """Final steps after recording and worker have stopped (runs on UI thread)."""
+        self.logger.info("Finalizing stop sequence (UI thread)...")
+        with self.state_lock:
+            # Logic moved from the end of the original stop_recording
+            # Determine final text based on mode (already decided in stop_recording)
+            final_text = self.accumulated_text
+
+            # --- Update UI with the FINAL complete text ---
+            self.logger.debug(f"Updating UI with final text: '{final_text}'")
+            self.ui.update_text(final_text)
+            self.ui.update_word_count(len(final_text.split()))
+
+            # Update UI to ready state
+            self.ui.update_status_color("ready")
+            self.logger.info("Recording stopped successfully.")
+
+            # Optionally trigger clipboard copy or other post-stop actions
+            # if final_text:
+            #     self._handle_clipboard_copy()
+
+    def _on_final_result(self, text: str) -> None:
+        """Callback executed by the worker with the final non-continuous result."""
+        self.logger.debug(f"Received final non-continuous result: '{text}'")
+        with self.state_lock:
+            # This text IS the complete result for non-continuous mode
+            self.accumulated_text = text

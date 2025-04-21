@@ -4,6 +4,7 @@ from tkinter import ttk, messagebox
 import logging
 import time
 from typing import Callable, Dict, Any, Optional
+import queue # Import queue
 
 from voice_input_service.ui.dialogs import SettingsDialog
 
@@ -39,6 +40,8 @@ class TranscriptionUI:
         # Callback handlers
         self.continuous_mode_handler = None
         self.language_handler = None
+        self.service_finalize_stop = None # Add reference for finalize_stop
+        self.service_queue: Optional[queue.Queue] = None # Add queue reference
         
         # Setup animation timer
         self.animation_after_id = None
@@ -257,13 +260,15 @@ class TranscriptionUI:
         else:
             # Stop animation
             self._stop_recording_animation()
-            
+
+            # --- Remove premature logging and status update --- 
             # Only log if status changed from previous state
-            if self.current_status != "ready":
-                self.logger.info("Status: Ready")
-                self.current_status = "ready"
+            # if self.current_status != "ready":
+            #     self.logger.info("Status: Ready")
+            #     self.current_status = "ready"
                 
-            self.status_label.config(text="Ready")
+            # self.status_label.config(text="Ready") 
+            # --- Let update_status_color handle the text --- 
     
     def update_word_count(self, count: int) -> None:
         """Update the word count display."""
@@ -320,8 +325,41 @@ class TranscriptionUI:
         self.current_status = text
         self.logger.debug(f"Status text updated: {text}")
     
+    def set_service_queue(self, q: queue.Queue) -> None:
+        """Set the queue for communication from the service."""
+        self.service_queue = q
+
+    def set_finalize_stop_handler(self, handler: Callable[[], None]) -> None:
+        """Set the handler function to call for finalizing stop."""
+        self.service_finalize_stop = handler
+
+    def _check_service_queue(self) -> None:
+        """Periodically check the service queue for messages."""
+        if self.service_queue:
+            try:
+                message = self.service_queue.get_nowait()
+                if message == "WORKER_STOPPED":
+                    self.logger.debug("UI received WORKER_STOPPED signal.")
+                    if self.service_finalize_stop:
+                        self.logger.debug("Calling service finalize_stop handler.")
+                        self.service_finalize_stop()
+                    else:
+                        self.logger.warning("Received WORKER_STOPPED but no finalize handler set.")
+                # Handle other potential messages here
+            except queue.Empty:
+                pass # No message
+            except Exception as e:
+                self.logger.error(f"Error processing UI queue message: {e}")
+
+        # Reschedule the check
+        if hasattr(self, 'window') and self.window.winfo_exists():
+            self.window.after(100, self._check_service_queue) # Check every 100ms
+
     def run(self) -> None:
-        """Start the UI event loop."""
+        """Start the UI event loop and the queue checker."""
+        # Start the queue checker loop
+        self._check_service_queue()
+        # Start the main Tkinter loop
         self.window.mainloop()
     
     def __del__(self) -> None:

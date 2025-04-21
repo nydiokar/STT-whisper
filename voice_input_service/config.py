@@ -20,6 +20,7 @@ class AudioConfig(BaseModel):
     min_process_interval: float = Field(0.5, description="Minimum interval between processing audio chunks")
     
     # Voice Activity Detection settings
+    vad_mode: Literal["basic", "webrtc", "silero"] = Field("silero", description="Voice activity detection mode")
     vad_threshold: float = Field(0.3, description="Silero VAD threshold (0.0-1.0)")
     silence_duration: float = Field(1.5, description="Wait for silence before processing (seconds)")
     
