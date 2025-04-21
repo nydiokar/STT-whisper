@@ -35,25 +35,30 @@ class TempWavFile:
         
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
         """Clean up the temporary file."""
-        self._cleanup()
+        # Keep the file for debugging instead of cleaning up immediately
+        if self.file_path:
+            output_path = f"{self.file_path}.txt"
+            if os.path.exists(output_path):
+                 logger.info(f"Associated output file (if any): {output_path}")
+        # self._cleanup() # Commented out cleanup
         
     def _cleanup(self) -> None:
         """Clean up temporary files."""
+        # Original cleanup code remains here but is not called automatically on exit
         if self.file_path and os.path.exists(self.file_path):
             try:
-                os.unlink(self.file_path)
-                logger.debug(f"Deleted temporary file: {self.file_path}")
+                # os.unlink(self.file_path) # Don't delete input wav
+                logger.debug(f"Original path: {self.file_path}") # Log path instead of deleting
             except Exception as e:
-                logger.warning(f"Failed to delete temporary file {self.file_path}: {e}")
+                logger.warning(f"Error during attempted cleanup log for {self.file_path}: {e}")
         
-        # Also clean up potential output file
         output_path = f"{self.file_path}.txt" if self.file_path else None
         if output_path and os.path.exists(output_path):
             try:
-                os.unlink(output_path)
-                logger.debug(f"Deleted output file: {output_path}")
+                # os.unlink(output_path) # Don't delete output txt
+                logger.debug(f"Original output path: {output_path}") # Log path instead of deleting
             except Exception as e:
-                logger.warning(f"Failed to delete output file {output_path}: {e}")
+                logger.warning(f"Error during attempted cleanup log for {output_path}: {e}")
 
 def transcribe(audio_data: bytes, 
                model_path: str,
@@ -100,16 +105,13 @@ def transcribe(audio_data: bytes,
     
     # Process audio using a context manager for cleanup
     with TempWavFile(audio_data) as temp_audio_path:
-        # Create output file path
-        output_path = f"{temp_audio_path}.txt"
-        
         # Prepare command for whisper.cpp
         cmd = [
             main_path,
             "-m", model_path,
             "-f", temp_audio_path,
             "-l", language,
-            "-of", output_path
+            "-otxt"  # Output as text to stdout
         ]
         
         # Run whisper.cpp process
@@ -128,17 +130,19 @@ def transcribe(audio_data: bytes,
             elapsed_time = time.time() - start_time
             logger.info(f"whisper.cpp transcription completed in {elapsed_time:.2f} seconds")
             
-            # Read the output file
-            if os.path.exists(output_path):
-                with open(output_path, "r", encoding="utf-8") as f:
-                    result = f.read()
-                    logger.debug(f"Transcription result: {result}")
-                    return result
+            # Read the result directly from stdout
+            if process.stdout:
+                result = process.stdout.strip() # Strip leading/trailing whitespace
+                logger.debug(f"Transcription result from stdout: {result}")
+                return result
             else:
-                logger.error(f"Output file not created: {output_path}")
-                if process.stdout:
-                    return process.stdout
+                # Log stderr if stdout is empty but the process didn't raise CalledProcessError
+                stderr_output = process.stderr.strip()
+                if stderr_output:
+                    logger.error(f"whisper.cpp produced no stdout, stderr: {stderr_output}")
+                    return f"Error: No output, stderr: {stderr_output}"
                 else:
+                    logger.error(f"whisper.cpp produced no stdout or stderr.")
                     return "Error: No output produced"
                     
         except subprocess.CalledProcessError as e:

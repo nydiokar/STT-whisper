@@ -41,7 +41,8 @@ class TranscriptionWorker(Component):
         self, 
         process_func: Callable[[bytes], Optional[str]],
         on_result: Callable[[str], None],
-        config: Config
+        config: Config,
+        initial_continuous_mode: bool = False
     ) -> None:
         """Initialize the worker.
         
@@ -49,11 +50,13 @@ class TranscriptionWorker(Component):
             process_func: Function that processes audio data and returns text
             on_result: Callback for when text is transcribed
             config: Application configuration
+            initial_continuous_mode: Initial continuous mode state
         """
         self.logger = logging.getLogger("VoiceService.Worker")
         self.process_func = process_func
         self.on_result = on_result
         self.config = config
+        self.continuous_mode = initial_continuous_mode
         
         # Extract settings from config
         self.min_audio_length = config.audio.min_audio_length
@@ -122,7 +125,7 @@ class TranscriptionWorker(Component):
         self.thread = threading.Thread(target=self._worker)
         self.thread.daemon = True
         self.thread.start()
-        self.logger.info(f"Transcription worker started with VAD mode: {self.silence_detector.mode}")
+        self.logger.info(f"Transcription worker started (using Silero VAD)")
         return True
     
     def stop(self) -> None:
@@ -178,7 +181,7 @@ class TranscriptionWorker(Component):
     
     def _worker(self) -> None:
         """Worker thread that processes audio chunks."""
-        self.logger.info("Worker thread started")
+        self.logger.info(f"Worker thread started (Continuous Mode: {self.continuous_mode})")
         
         buffer = bytearray()
         last_speech_time = time.time()
@@ -199,50 +202,72 @@ class TranscriptionWorker(Component):
                         self.audio_queue.task_done()
                         continue
                         
-                    # Check if this chunk contains speech or silence
+                    # Check VAD
                     is_silence = self._is_silent(audio_chunk)
                     
                     with self.buffer_lock:
+                        time_since_speech = time.time() - last_speech_time
+                        current_buffer_len = len(buffer)
+                        # Access the worker's current mode state safely
+                        is_continuous = self.continuous_mode 
+                        
+                        self.logger.debug(f"Worker Loop: Cont={is_continuous}, VAD={not is_silence}, BufLen={current_buffer_len}, TimeSinceSpeech={time_since_speech:.2f}s")
+
+                        # --- Processing Logic --- 
+                        process_now = False
+                        reason = ""
+
                         if not is_silence:
-                            # Speech detected - add to buffer
-                            self.logger.debug(f"Speech detected in chunk ({len(audio_chunk)} bytes)")
+                            # Speech detected: Add to buffer, update last speech time
                             buffer.extend(audio_chunk)
                             last_speech_time = time.time()
                         else:
-                            # Silence detected - add to buffer if recent speech
-                            time_since_speech = time.time() - last_speech_time
-                            
-                            if time_since_speech < self.silence_duration:
-                                # Add silence to buffer if we recently had speech
+                            # Silence detected: Extend buffer only if recent speech or non-continuous
+                            # In non-continuous, we buffer silence too, up to max_chunk_size
+                            if time_since_speech < self.silence_duration or not is_continuous:
                                 buffer.extend(audio_chunk)
-                            elif len(buffer) >= self.min_audio_length:
-                                # If we have enough buffered audio and silence has been long enough
-                                # Process the buffer now
-                                audio_copy = bytes(buffer)  # Create a copy to avoid race conditions
-                                buffer.clear()
-                                self._process_chunk(audio_copy)
                             
-                        # Cap buffer size to prevent memory issues
-                        if len(buffer) > self.max_chunk_size:
-                            self.logger.debug(f"Buffer reached max size ({len(buffer)/1024:.1f} KB), processing")
-                            audio_copy = bytes(buffer)  # Create a copy to avoid race conditions
+                            # Check processing conditions ONLY if continuous mode
+                            if is_continuous and current_buffer_len >= self.min_audio_length and \
+                               time_since_speech >= self.silence_duration:
+                                process_now = True
+                                reason = "Silence & MinLength (Continuous)"
+                        
+                        # Check max buffer size condition (applies to both modes)
+                        # Use updated buffer length after potential extend
+                        current_buffer_len = len(buffer) # Re-check length after extend
+                        if current_buffer_len > self.max_chunk_size:
+                            process_now = True
+                            reason = "MaxSize"
+                        
+                        # --- Perform Processing if needed --- 
+                        if process_now:
+                            self.logger.debug(f"Processing ({reason}): BufLen={current_buffer_len}, TimeSinceSpeech={time_since_speech:.2f}s")
+                            audio_copy = bytes(buffer)
                             buffer.clear()
                             self._process_chunk(audio_copy)
-                    
+                            # Reset last_speech_time after processing to avoid immediate re-processing if silence follows
+                            last_speech_time = time.time() 
+
                     self.audio_queue.task_done()
                         
                 except queue.Empty:
-                    # If queue is empty and we have buffered data waiting
+                    # Queue is empty
                     with self.buffer_lock:
-                        if len(buffer) >= self.min_audio_length:
-                            time_since_speech = time.time() - last_speech_time
-                            
-                            # Process if we haven't had speech for a while
-                            if time_since_speech >= self.silence_duration:
-                                self.logger.debug(f"Queue empty, processing buffered data ({len(buffer)/1024:.1f} KB)")
-                                audio_copy = bytes(buffer)  # Create a copy to avoid race conditions
-                                buffer.clear()
-                                self._process_chunk(audio_copy)
+                        time_since_speech = time.time() - last_speech_time
+                        current_buffer_len = len(buffer)
+                        is_continuous = self.continuous_mode # Access mode safely
+
+                        self.logger.debug(f"Worker Loop: QueueEmpty, Cont={is_continuous}, BufLen={current_buffer_len}, TimeSinceSpeech={time_since_speech:.2f}s")
+                        
+                        # Process final buffer ONLY if continuous mode and silence conditions met
+                        if is_continuous and current_buffer_len >= self.min_audio_length and \
+                           time_since_speech >= self.silence_duration:
+                            self.logger.debug(f"Processing (QueueEmpty & Silence & MinLength - Continuous): BufLen={current_buffer_len}, TimeSinceSpeech={time_since_speech:.2f}s")
+                            audio_copy = bytes(buffer)
+                            buffer.clear()
+                            self._process_chunk(audio_copy)
+                            last_speech_time = time.time() # Reset timer
             except Exception as e:
                 self.logger.error(f"Error in worker thread: {e}")
                 # Clear buffer on error
@@ -253,15 +278,21 @@ class TranscriptionWorker(Component):
     
     def _process_chunk(self, audio_data: bytes) -> None:
         """Process a chunk of audio data."""
-        # Skip if too recent or too short
         current_time = time.time()
+        audio_len = len(audio_data)
+        
+        # Log the size received
+        self.logger.debug(f"_process_chunk received audio chunk. Size: {audio_len} bytes.")
+
+        # Skip if too recent or too short
         if (current_time - self.last_process_time < self.min_process_interval or 
-                len(audio_data) < self.min_chunk_size):
+                audio_len < self.min_chunk_size):
+            self.logger.debug(f"Skipping chunk processing: Too recent or too short ({audio_len} bytes < {self.min_chunk_size} min bytes or interval issue)")
             return
             
         self.last_process_time = current_time
         
-        self.logger.debug(f"Processing audio chunk ({len(audio_data)/1024:.1f} KB)")
+        self.logger.info(f"Processing audio chunk ({audio_len/1024:.1f} KB)") # Changed level to INFO for visibility
         
         # Process the audio data 
         result = self.process_func(audio_data)
@@ -301,6 +332,14 @@ class TranscriptionWorker(Component):
             
         # Log the update
         self.logger.debug(f"Updated VAD settings: mode={vad_mode}, silence_duration={self.silence_duration}s")
+    
+    def set_continuous_mode(self, enabled: bool) -> None:
+        """Update the worker's continuous mode state."""
+        with self.buffer_lock: # Use lock for thread safety
+            if self.continuous_mode != enabled:
+                self.continuous_mode = enabled
+                self.logger.info(f"Worker continuous mode set to: {self.continuous_mode}")
+                # Optional: Reset buffer or timers if needed when mode changes, but maybe not necessary here.
     
     def __del__(self) -> None:
         """Ensure resources are cleaned up."""

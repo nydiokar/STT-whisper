@@ -4,6 +4,8 @@ import time
 from typing import Optional
 import logging
 import numpy as np
+import tkinter as tk
+from tkinter import messagebox
 
 # Import core components
 from voice_input_service.core.audio import AudioRecorder
@@ -56,9 +58,8 @@ class VoiceInputService(EventHandler, Closeable):
         
         # State variables
         self.recording = False
-        self.recording_start_time = 0.0
-        self.accumulated_text = ""
-        self.continuous_mode = False
+        # Read initial continuous mode state from config
+        self.continuous_mode = config.transcription.continuous_mode 
         self.model_error_reported = False
         
         # Thread synchronization
@@ -68,11 +69,12 @@ class VoiceInputService(EventHandler, Closeable):
         # Test the transcription model before starting
         self._verify_transcription_model()
         
-        # Set up processing worker with VAD support
+        # Set up processing worker, passing initial mode
         self.worker = TranscriptionWorker(
             process_func=self._process_audio_chunk,
             on_result=self._on_transcription_result,
-            config=self.config
+            config=self.config,
+            initial_continuous_mode=self.continuous_mode # Pass initial state
         )
         
         # Set up UI events
@@ -85,6 +87,9 @@ class VoiceInputService(EventHandler, Closeable):
         # Set config in UI and register for settings changes
         self.ui.set_config(self.config)
         self.ui.on_settings_changed = self._on_settings_changed
+        
+        self.logger.info(f"Initializing VoiceInputService instance, id(self): {id(self)}")
+        self.accumulated_text = ""
         
         self.logger.info("Voice Input Service ready")
     
@@ -136,23 +141,36 @@ class VoiceInputService(EventHandler, Closeable):
         self.ui.set_language_handler(self._change_language)
     
     def _toggle_continuous_mode(self, enabled: bool) -> None:
-        """Toggle continuous mode.
-        
-        Args:
-            enabled: Whether continuous mode is enabled
-        """
-        with self.state_lock:
-            self.continuous_mode = enabled
-            self.event_manager.continuous_mode = self.continuous_mode
+        """Toggle continuous mode."""
+        # Prevent mode change while recording
+        if self.recording:
+            self.logger.warning("Cannot change continuous mode while recording is active.")
+            # Optionally, revert the checkbox state in the UI if possible
+            # self.ui.continuous_var.set(not enabled) # Revert UI state
+            messagebox.showwarning("Recording Active", "Cannot change Continuous Mode while recording is in progress.")
+            self.ui.continuous_var.set(self.continuous_mode) # Set checkbox back
+            return
             
-            # Update the config with continuous mode setting
+        with self.state_lock:
+            if self.continuous_mode == enabled:
+                return # No change
+                
+            self.continuous_mode = enabled
+            # Update keyboard manager if needed
+            if hasattr(self, 'event_manager'): 
+                self.event_manager.continuous_mode = self.continuous_mode
+            
+            # Update the config object
             self.config.transcription.continuous_mode = enabled
             
-            # Update the worker's settings to adjust silence duration
+            # Update the worker's mode state and VAD settings
             if hasattr(self, 'worker'):
+                self.worker.set_continuous_mode(enabled) # Inform the worker
                 self.worker.update_vad_settings()
                 
             self.logger.info(f"Continuous mode {'enabled' if self.continuous_mode else 'disabled'}")
+            # Consider saving config here if desired, or rely on SettingsDialog save
+            # self.config.save()
     
     def _change_language(self, language: str) -> None:
         """Change the transcription language.
@@ -187,15 +205,20 @@ class VoiceInputService(EventHandler, Closeable):
     
     def _process_audio_chunk(self, audio_data: bytes) -> Optional[str]:
         """Process an audio chunk and return transcription result."""
-        # Use a larger minimum chunk size for better accuracy
-        min_chunk_size = self.config.transcription.min_chunk_size  # Default 32000 bytes (about 1 second)
-        
+        min_chunk_size = self.config.transcription.min_chunk_size
         if not audio_data or len(audio_data) < min_chunk_size:
             return None
 
+        chunk_duration = len(audio_data) / (self.config.audio.sample_rate * 2) # Approx duration
+        self.logger.info(f"Starting transcription for audio chunk ({chunk_duration:.1f}s)...") # Log start
+        start_time = time.time()
+        
         try:
             # Transcribe the audio data
             result = self.transcriber.transcribe(audio=audio_data)
+            
+            end_time = time.time()
+            self.logger.info(f"Transcription finished in {end_time - start_time:.2f} seconds.") # Log end
             
             # Get the text and apply more aggressive filtering
             text = result.get("text", "").strip()
@@ -247,6 +270,14 @@ class VoiceInputService(EventHandler, Closeable):
                 
             self.logger.info("Starting recording")
             
+            # --- Always clear previous text for a clean start --- 
+            self.logger.debug("Clearing previous accumulated text for new recording session.")
+            self.accumulated_text = ""
+            # Also clear the UI display immediately
+            self.ui.update_text("") 
+            self.ui.update_word_count(0)
+            # ---------------------------------------------------
+
             # Cancel any pending stop timer
             if self.stop_timer:
                 self.stop_timer.cancel()
@@ -275,20 +306,11 @@ class VoiceInputService(EventHandler, Closeable):
             return True
     
     def stop_recording(self, cancel_timer: bool = True) -> str:
-        """Stop audio recording and return the transcription.
-        
-        Args:
-            cancel_timer: Whether to cancel any pending stop timer
-        
-        Returns:
-            Accumulated transcription text
-        """
+        """Stop audio recording, process final chunk, update state/UI, and return text."""
+        final_text_to_return = ""
         with self.state_lock:
-            if not self.recording:
-                self.logger.warning("Not recording")
-                return ""
-            
-            self.logger.info("Stopping recording")
+            if not self.recording: return "" 
+            self.logger.info(f"Stopping recording... Instance: {id(self)}")
             
             # Cancel any pending stop timer
             if cancel_timer and self.stop_timer:
@@ -301,81 +323,115 @@ class VoiceInputService(EventHandler, Closeable):
             # Stop audio recorder and get final data
             audio_data = self.recorder.stop()
             
-            # Update UI status
+            # Show processing status
             self.ui.update_status(False)
             self.ui.update_status_color("processing")
-            
-            # Process any remaining audio buffer if significant
-            if len(audio_data) > 8000:  # At least ~0.1s of audio
-                self.logger.info(f"Processing final audio chunk ({len(audio_data)/1024:.1f} KB)")
-                self._process_audio_chunk(audio_data)
-            
-            # Stop the worker after processing final chunk
-            self.worker.stop()
-            
-            # Now update the UI with the full accumulated text if in normal mode
+
+            # --- Conditional Final Chunk Processing ---
             if not self.continuous_mode:
-                self.ui.update_text(self.accumulated_text)
-                self.ui.update_word_count(len(self.accumulated_text.split()))
-            
+                # == Non-Continuous Mode: Process the entire recording once ==
+                self.logger.info("Non-continuous mode: Processing entire recording.")
+                final_chunk_text: Optional[str] = None
+                # Ensure accumulated text is clear before setting from final chunk
+                self.accumulated_text = "" 
+                if len(audio_data) > self.config.transcription.min_chunk_size: # Use configured min size
+                    self.logger.info(f"Starting final audio chunk processing ({len(audio_data)/1024:.1f} KB)...")
+                    start_time = time.time()
+                    try:
+                        # Process the final chunk directly
+                        final_chunk_text = self._process_audio_chunk(audio_data)
+                    finally:
+                        end_time = time.time()
+                        self.logger.info(f"Final audio chunk processing finished in {end_time - start_time:.2f} seconds.")
+
+                    if final_chunk_text:
+                        self.logger.debug("Setting accumulated text from final chunk.")
+                        # This IS the final text for non-continuous mode
+                        self.accumulated_text = final_chunk_text
+                    else:
+                        self.logger.warning("Final audio chunk processing yielded no text.")
+                else:
+                    self.logger.info("Skipping final audio chunk processing (too short).")
+            else:
+                # == Continuous Mode: Use incrementally built text ==
+                self.logger.info("Continuous mode: Skipping final chunk processing, using incremental results.")
+                # self.accumulated_text already holds the text from _on_transcription_result
+            # --- End Conditional Processing ---
+
+            # Stop the worker thread (important after deciding final text)
+            self.worker.stop()
+
+            # --- Update UI with the FINAL complete text ---
+            self.logger.debug(f"Updating UI with final text: '{self.accumulated_text}'")
+            self.ui.update_text(self.accumulated_text)
+            self.ui.update_word_count(len(self.accumulated_text.split()))
+
             # Update UI to ready state
             self.ui.update_status_color("ready")
             
-            return self.accumulated_text
+            final_text_to_return = self.accumulated_text
+            # --- End of state_lock block ---
+            
+        self.logger.info("Recording stopped successfully.")
+        return final_text_to_return
     
     def _on_transcription_result(self, text: str) -> None:
-        """Handle transcription result."""
+        """Handle transcription result FROM THE WORKER during continuous mode."""
+        # If not in continuous mode, this callback should ideally not be triggered by the worker,
+        # but we add a check just in case.
+        if not self.continuous_mode:
+            self.logger.debug(f"Ignoring intermediate transcription result in non-continuous mode: {text}")
+            return
+            
         if not text:
             return
             
-        self.logger.debug(f"Received transcription: {text}")
+        self.logger.debug(f"Received intermediate transcription chunk (continuous): {text}")
         
-        # Clean up the text and filter hallucinations
+        # Clean up the text
         text = text.strip()
-        if text == "." or not text:  # Skip empty or just punctuation
-            return
-            
-        # Remove timestamps and filter out hallucinated phrases
+        if text == "." or not text: return
         text = self.text_processor.remove_timestamps(text)
-        if not text:
-            return
-            
+        if not text: return
         text = self.text_processor.filter_hallucinations(text)
-        if not text:  # Skip if filtered out
-            return
+        if not text: return
             
-        # Update accumulated text - protect with lock
-        with self.state_lock:
+        # --- Update UI Incrementally (Continuous Mode) --- 
+        # Append the new text chunk to the UI display
+        # NOTE: This requires the UI method to handle appending or be called appropriately.
+        # Assuming ui.update_text replaces content for now.
+        # A potential improvement: ui.append_text(text)
+        with self.state_lock: # Lock needed if we read accumulated_text
+            # Build the text to display (potentially including previous chunks for this session)
+            # For simplicity, let's keep track of UI text separately or just append
+            # Let's try just appending the new fragment for now
+            # We need a way to get current text from UI or store it
+            # current_ui_text = self.ui.get_text() # Hypothetical UI method
+            # self.ui.update_text(current_ui_text + " " + text)
+            
+            # Alternative: Update accumulated text HERE for continuous mode only?
+            # This makes stop_recording simpler for continuous.
             if self.accumulated_text:
-                # Use the text processor to properly append text
-                self.accumulated_text = self.text_processor.append_text(self.accumulated_text, text)
+                 self.accumulated_text = self.text_processor.append_text(self.accumulated_text, text)
             else:
-                self.accumulated_text = text
-        
-        # Update UI with accumulated text - only in continuous mode
-        # In normal mode, we update the UI only when recording stops
-        if self.continuous_mode:
-            self.ui.update_text(self.accumulated_text)
+                 self.accumulated_text = text
+            self.ui.update_text(self.accumulated_text) # Update UI with growing text
             self.ui.update_word_count(len(self.accumulated_text.split()))
-        else:
-            # In normal mode, just update the status to show we're still processing
-            self.ui.update_status_color("processing")
-            self.ui.update_status_text("Transcribing...")
+        # -----------------------------------------------
         
-        # Natural pause detection only in non-continuous mode
-        if self.recording and not self.continuous_mode:
-            self.logger.debug("Natural pause detected after transcription, stopping in 1.5 seconds unless more speech is detected")
-            
-            # Cancel any existing timer before creating a new one
-            with self.state_lock:
-                if self.stop_timer:
-                    self.stop_timer.cancel()
-                    
-                # Create a new delayed stop timer
-                self.stop_timer = threading.Timer(1.5, self._delayed_stop)
-                self.stop_timer.daemon = True
-                self.stop_timer.start()
-    
+        # Check pause detection ONLY if continuous mode (already checked above, but safe)
+        if self.continuous_mode:
+            self.logger.debug("Checking for natural pause in continuous mode (intermediate chunk)...")
+            if not self.worker.has_recent_audio():
+                self.logger.debug("Natural pause detected, scheduling delayed stop...")
+                self._delayed_stop() 
+            else:
+                # Cancel timer if speech resumes quickly
+                with self.state_lock:
+                    if self.stop_timer:
+                        self.stop_timer.cancel()
+                        self.stop_timer = None
+
     def _delayed_stop(self) -> None:
         """Handle delayed stop logic in a thread-safe way."""
         with self.state_lock:

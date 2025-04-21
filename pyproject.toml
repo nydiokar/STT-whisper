@@ -12,6 +12,8 @@ dependencies = [
     "pydantic>=2.5.2",
     "ffmpeg-python>=0.2.0",  # For FFmpeg integration
     "numpy>=1.24.0",         # Required for audio processing
+    "torch>=2.0.0",
+    "torchaudio>=2.3.0",     # Added for Silero VAD
 ]
 
 [project.optional-dependencies]
@@ -104,3 +106,30 @@ ignore = ["E501"]  # Line length is handled by black
 line-length = 88
 target-version = "py38"
 fix = true
+
+[tool.poetry.dependencies]
+python = ">=3.8,<3.12"
+pyaudio = "^0.2.14"
+pydantic = "^2.7.1"
+openai-whisper = "^20231117"
+# Add torchaudio for Silero VAD
+torchaudio = "^2.3.0" # Or match your torch version
+# Torch is needed for Silero VAD, ensure it's present or add it
+torch = "^2.3.0" # Consider CPU or CUDA version if needed
+
+# Optional VAD dependency
+webrtcvad = {version = "^2.0.10", optional = true}
+
+# UI and event handling
+tkinter = { version = "*", python = "<3.7" } # Placeholder, usually included
+ttkthemes = "^3.2.2"
+keyboard = "^0.13.5"
+
+# Logging and file ops
+loguru = "^0.7.2"
+
+[tool.poetry.group.dev.dependencies]
+# ... existing dev dependencies ...
+
+[tool.poetry.extras]
+vad = ["webrtcvad"]

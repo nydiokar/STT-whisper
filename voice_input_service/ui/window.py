@@ -205,94 +205,11 @@ class TranscriptionUI:
         if hasattr(self, 'config'):
             self.language_var.set(self.config.transcription.language)
     
-    def _setup_vad_settings(self) -> None:
-        """Set up VAD settings in the UI.
-        
-        This should be called when creating the settings dialog.
-        """
-        if not hasattr(self, 'config') or not hasattr(self, 'settings_window'):
-            self.logger.error("Cannot set up VAD settings: config or settings window not set")
-            return
-            
-        settings = self.settings_window
-        
-        # Create VAD frame
-        settings.vad_frame = tk.LabelFrame(settings.root, text="Voice Activity Detection")
-        settings.vad_frame.pack(fill="x", padx=10, pady=5)
-        
-        # VAD mode
-        settings.vad_mode_var = tk.StringVar(value=self.config.get("audio.vad_mode", "silero"))
-        vad_mode_frame = tk.Frame(settings.vad_frame)
-        vad_mode_frame.pack(fill="x", padx=5, pady=5)
-        
-        tk.Label(vad_mode_frame, text="VAD Mode:").pack(side="left")
-        vad_modes = ["basic", "webrtc", "silero"]
-        settings.vad_mode_menu = tk.OptionMenu(
-            vad_mode_frame, 
-            settings.vad_mode_var, 
-            *vad_modes
-        )
-        settings.vad_mode_menu.pack(side="right")
-        
-        # VAD aggressiveness (for WebRTC)
-        settings.vad_aggressiveness_var = tk.IntVar(value=self.config.get("audio.vad_aggressiveness", 3))
-        vad_agg_frame = tk.Frame(settings.vad_frame)
-        vad_agg_frame.pack(fill="x", padx=5, pady=5)
-        
-        tk.Label(vad_agg_frame, text="WebRTC Aggressiveness:").pack(side="left")
-        settings.vad_agg_scale = tk.Scale(
-            vad_agg_frame,
-            from_=0,
-            to=3,
-            orient="horizontal",
-            variable=settings.vad_aggressiveness_var
-        )
-        settings.vad_agg_scale.pack(side="right", fill="x", expand=True)
-        
-        # VAD threshold (for Silero)
-        settings.vad_threshold_var = tk.DoubleVar(value=self.config.get("audio.vad_threshold", 0.5))
-        vad_threshold_frame = tk.Frame(settings.vad_frame)
-        vad_threshold_frame.pack(fill="x", padx=5, pady=5)
-        
-        tk.Label(vad_threshold_frame, text="Silero Threshold:").pack(side="left")
-        settings.vad_threshold_scale = tk.Scale(
-            vad_threshold_frame,
-            from_=0.1,
-            to=0.9,
-            resolution=0.1,
-            orient="horizontal",
-            variable=settings.vad_threshold_var
-        )
-        settings.vad_threshold_scale.pack(side="right", fill="x", expand=True)
-        
-        # Connect settings changes to callback
-        self._connect_vad_settings_callbacks(settings)
-        
-    def _connect_vad_settings_callbacks(self, settings) -> None:
-        """Connect VAD settings callbacks."""
-        def on_vad_change(*args):
-            # Update config
-            self.config.set("audio.vad_mode", settings.vad_mode_var.get())
-            self.config.set("audio.vad_aggressiveness", settings.vad_aggressiveness_var.get())
-            self.config.set("audio.vad_threshold", settings.vad_threshold_var.get())
-            self.config.save()
-            
-            # Notify settings changed
-            if self.on_settings_changed:
-                self.on_settings_changed()
-        
-        # Attach change handlers
-        settings.vad_mode_var.trace_add("write", on_vad_change)
-        settings.vad_aggressiveness_var.trace_add("write", on_vad_change)
-        settings.vad_threshold_var.trace_add("write", on_vad_change)
-    
     def _show_settings(self) -> None:
         """Show the settings dialog."""
-        # We'll pass the config in service.py when we connect this button
         if hasattr(self, 'config'):
+            # Create the dialog, it will handle its own UI setup
             self.settings_window = SettingsDialog(self.window, self.config, self.on_settings_changed)
-            # Add VAD settings to the dialog
-            self._setup_vad_settings()
         else:
             self.logger.error("Cannot show settings: config not set")
             
@@ -409,6 +326,11 @@ class TranscriptionUI:
     
     def __del__(self) -> None:
         """Clean up UI resources."""
+        # Stop animation timer if running
         self._stop_recording_animation()
-        if hasattr(self, 'window'):
-            self.window.destroy() 
+        
+        # No need to explicitly destroy the window here,
+        # as it should be handled by the main application loop exit.
+        # Attempting to destroy here can cause errors if called after mainloop exit.
+        # if self.window:
+        #    self.window.destroy() 

@@ -388,10 +388,13 @@ class SettingsDialog:
         self.dialog.transient(parent)
         self.dialog.grab_set()
         
-        # Set up variables
+        # Set up variables (Transcription Tab)
         self.use_cpp_var = tk.BooleanVar(value=config.transcription.use_cpp)
         self.whisper_cpp_path_var = tk.StringVar(value=config.transcription.whisper_cpp_path)
         self.ggml_model_var = tk.StringVar(value=config.transcription.ggml_model_path or "")
+        
+        # VAD Setting Variable (Silero Only)
+        self.vad_threshold_var = tk.DoubleVar(value=self.config.audio.vad_threshold)
         
         # Collect available GGML models
         self.ggml_models = self._find_ggml_models()
@@ -427,10 +430,24 @@ class SettingsDialog:
         
     def _setup_ui(self):
         """Set up the dialog UI."""
-        notebook = ttk.Notebook(self.dialog)
-        notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        # --- Buttons Frame (Pack this first at the bottom) --- 
+        button_frame = ttk.Frame(self.dialog) 
+        button_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=10, pady=(5, 10), expand=False) 
         
-        # Transcription tab
+        # Add Save button
+        save_button = ttk.Button(button_frame, text="Save", command=self._on_save)
+        save_button.pack(side=tk.RIGHT, padx=5) 
+        
+        # Add Cancel button
+        cancel_button = ttk.Button(button_frame, text="Cancel", command=self._on_cancel)
+        cancel_button.pack(side=tk.RIGHT, padx=5) 
+
+        # --- Main Content Area (Notebook - Pack this second to fill remaining space) --- 
+        notebook = ttk.Notebook(self.dialog)
+        # Fill the rest of the space ABOVE the button frame
+        notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10, side=tk.TOP) 
+        
+        # --- Transcription Tab --- 
         transcription_frame = ttk.Frame(notebook, padding="10")
         notebook.add(transcription_frame, text="Transcription")
         
@@ -541,17 +558,13 @@ class SettingsDialog:
         )
         info_text.config(state=tk.DISABLED)
         
-        # Buttons
-        button_frame = ttk.Frame(self.dialog)
-        button_frame.pack(fill=tk.X, padx=10, pady=10)
+        # --- Audio & VAD Tab --- 
+        audio_frame = ttk.Frame(notebook, padding="10")
+        notebook.add(audio_frame, text="Audio & VAD")
+        # Call the simplified VAD setup method
+        self._setup_vad_settings(audio_frame) 
         
-        save_button = ttk.Button(button_frame, text="Save", command=self._on_save)
-        save_button.pack(side=tk.RIGHT, padx=5)
-        
-        cancel_button = ttk.Button(button_frame, text="Cancel", command=self._on_cancel)
-        cancel_button.pack(side=tk.RIGHT, padx=5)
-        
-        # Initial state
+        # Initial state update for whisper.cpp options
         self._toggle_cpp_options()
         
     def _toggle_cpp_options(self):
@@ -575,21 +588,85 @@ class SettingsDialog:
             
     def _on_save(self):
         """Save settings and close dialog."""
-        # Update config
+        # Update config from all variables
         self.config.transcription.use_cpp = self.use_cpp_var.get()
         self.config.transcription.whisper_cpp_path = self.whisper_cpp_path_var.get()
         self.config.transcription.ggml_model_path = self.ggml_model_var.get()
+        # VAD threshold is already updated in config by the trace_add callback
+        # self.config.audio.vad_threshold = self.vad_threshold_var.get() # No need to set again
         
         # Save to file
         self.config.save()
         
         # Call callback if provided
         if self.on_save:
-            self.on_save()
+            self.on_save() # Call the main settings changed handler
             
         self.logger.info("Settings saved")
         self.dialog.destroy()
         
     def _on_cancel(self):
         """Cancel and close dialog."""
-        self.dialog.destroy() 
+        self.dialog.destroy()
+
+    # --- VAD Settings Method (Simplified for Silero Only) ---
+    def _setup_vad_settings(self, parent_frame: ttk.Frame) -> None:
+        """Set up Silero VAD settings in the UI."""
+        vad_frame = tk.LabelFrame(parent_frame, text="Voice Activity Detection (Silero VAD)", padding="10")
+        vad_frame.pack(fill="x", padx=10, pady=5)
+        
+        # VAD threshold (for Silero)
+        vad_threshold_frame = tk.Frame(vad_frame)
+        vad_threshold_frame.pack(fill="x", padx=5, pady=5)
+        
+        tk.Label(vad_threshold_frame, text="Silero Speech Probability Threshold:").pack(side="left")
+        vad_threshold_scale = tk.Scale(
+            vad_threshold_frame,
+            from_=0.1, # Min sensible threshold
+            to=0.9,  # Max sensible threshold
+            resolution=0.05, # Finer steps
+            orient="horizontal",
+            variable=self.vad_threshold_var # Use class variable
+        )
+        vad_threshold_scale.pack(side="right", fill="x", expand=True)
+        
+        # Connect settings changes to callback
+        self._connect_vad_settings_callbacks()
+        
+    def _connect_vad_settings_callbacks(self) -> None:
+        """Connect Silero VAD threshold setting callback."""
+        def on_vad_threshold_change(*args):
+            # Update config directly when slider changes
+            # The actual saving happens in _on_save
+            if self.config:
+                self.config.audio.vad_threshold = self.vad_threshold_var.get()
+                # Maybe add a log message here
+                # self.logger.debug(f"SettingsDialog: VAD threshold slider changed to {self.config.audio.vad_threshold}")
+        
+        # Attach change handler
+        self.vad_threshold_var.trace_add("write", on_vad_threshold_change)
+
+    # ... _toggle_cpp_options, _browse_executable ...
+
+    def _on_save(self):
+        """Save settings and close dialog."""
+        # Update config from all variables
+        self.config.transcription.use_cpp = self.use_cpp_var.get()
+        self.config.transcription.whisper_cpp_path = self.whisper_cpp_path_var.get()
+        self.config.transcription.ggml_model_path = self.ggml_model_var.get()
+        # VAD threshold is already updated in config by the trace_add callback
+        # self.config.audio.vad_threshold = self.vad_threshold_var.get() # No need to set again
+        
+        # Save to file
+        self.config.save()
+        
+        # Call callback if provided
+        if self.on_save:
+            self.on_save() # Call the main settings changed handler
+            
+        self.logger.info("Settings saved")
+        self.dialog.destroy()
+        
+    def _on_cancel(self):
+        """Cancel and close dialog."""
+        self.dialog.destroy()
