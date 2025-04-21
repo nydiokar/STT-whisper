@@ -3,6 +3,8 @@ import tkinter as tk
 from tkinter import ttk
 import logging
 
+from voice_input_service.ui.dialogs import SettingsDialog
+
 class TranscriptionUI:
     """Handles the user interface for transcription."""
     
@@ -28,6 +30,9 @@ class TranscriptionUI:
         
         # Track current status to avoid duplicate logs
         self.current_status = ""
+        
+        # Callback for settings changes
+        self.on_settings_changed = None
         
         self._setup_ui()
         self.logger.info("UI initialized")
@@ -67,6 +72,10 @@ class TranscriptionUI:
         )
         language_combo.pack(side=tk.LEFT, padx=5)
         
+        # Settings button
+        settings_button = ttk.Button(controls_frame, text="Settings", command=self._show_settings)
+        settings_button.pack(side=tk.RIGHT, padx=5)
+        
         # Text display with improved styling
         text_frame = ttk.LabelFrame(self.window, text="Transcription", padding="5")
         text_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
@@ -100,7 +109,23 @@ class TranscriptionUI:
         shortcuts_text = "Alt+R: Start/Stop Recording | Alt+S: Save | Alt+C: Clear"
         shortcut_label = ttk.Label(shortcut_frame, text=shortcuts_text, justify=tk.CENTER)
         shortcut_label.pack(fill=tk.X)
+    
+    def _show_settings(self) -> None:
+        """Show the settings dialog."""
+        # We'll pass the config in service.py when we connect this button
+        if hasattr(self, 'config'):
+            dialog = SettingsDialog(self.window, self.config, self.on_settings_changed)
+        else:
+            self.logger.error("Cannot show settings: config not set")
+            
+    def set_config(self, config) -> None:
+        """Set the configuration for this UI.
         
+        Args:
+            config: Application configuration
+        """
+        self.config = config
+    
     def update_status_color(self, status: str) -> None:
         """Update the status frame color to indicate the current status."""
         if not hasattr(self, 'status_frame') or not self.status_frame.winfo_exists():
@@ -198,6 +223,16 @@ class TranscriptionUI:
         except tk.TclError:
             # Widget might have been destroyed while we were processing
             pass
+    
+    def update_status_text(self, text: str) -> None:
+        """Update the status text.
+        
+        Args:
+            text: Status text to display
+        """
+        self.status_label.config(text=text)
+        self.current_status = text
+        self.logger.debug(f"Status text updated: {text}")
     
     def run(self) -> None:
         """Start the UI event loop."""

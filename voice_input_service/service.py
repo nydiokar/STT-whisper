@@ -1,13 +1,11 @@
 from __future__ import annotations
 import threading
 import time
-import os
 from typing import Optional
 import pyperclip
 import logging
-import whisper
 import tkinter as tk
-from tkinter import filedialog, messagebox
+from tkinter import messagebox
 import numpy as np
 
 # Import core components
@@ -15,9 +13,7 @@ from voice_input_service.core.audio import AudioRecorder
 from voice_input_service.core.transcription import TranscriptionEngine
 from voice_input_service.core.processing import TranscriptionWorker
 from voice_input_service.utils.file_ops import TranscriptManager
-from voice_input_service.utils.logging import setup_logging
 from voice_input_service.ui.window import TranscriptionUI
-from voice_input_service.ui.dialogs import ModelSelectionDialog, DownloadProgressDialog
 from voice_input_service.ui.events import KeyboardEventManager, EventHandler
 from voice_input_service.core.config import Config
 
@@ -80,7 +76,10 @@ class VoiceInputService(EventHandler):
         self.event_manager = KeyboardEventManager(self)
         self.event_manager.setup_hotkeys()
         
-        self.logger.info("Voice Input Service initialized")
+        self.ui.set_config(self.config)
+        self.ui.on_settings_changed = self._on_settings_changed
+        
+        self.logger.info("Voice Input Service ready")
     
     def _setup_ui_events(self) -> None:
         """Setup UI event callbacks."""
@@ -383,7 +382,7 @@ class VoiceInputService(EventHandler):
     
     def run(self) -> None:
         """Run the service."""
-        self.logger.info("Starting main service loop")
+        self.logger.info("Starting main application loop")
         
         # Setup UI update timer
         def update_ui() -> None:
@@ -414,7 +413,7 @@ class VoiceInputService(EventHandler):
             self.ui.run()
         finally:
             # Make sure we clean up properly when closing
-            self.logger.info("Main loop ended, cleaning up resources")
+            self.logger.info("Main application loop ended, cleaning up resources")
             self._cleanup()
     
     def _cleanup(self) -> None:
@@ -441,3 +440,55 @@ class VoiceInputService(EventHandler):
         """Clean up service resources."""
         self.logger.info("Shutting down Voice Input Service")
         self._cleanup()
+
+    def _on_settings_changed(self) -> None:
+        """Handle changes to settings."""
+        self.logger.info("Settings updated - applying changes")
+        
+        # Check if we need to reinitialize the transcription engine
+        use_cpp = self.config.transcription.use_cpp
+        whisper_cpp_path = self.config.transcription.whisper_cpp_path
+        ggml_model_path = self.config.transcription.ggml_model_path
+        
+        # If engine type changed or whisper.cpp path changed while using cpp
+        current_is_cpp = getattr(self.transcriber, "use_cpp", False)
+        
+        # Identify what changed to give a specific message
+        if current_is_cpp != use_cpp:
+            change_type = "engine type"
+            needs_restart = True
+        elif use_cpp and self.transcriber.whisper_cpp_path != whisper_cpp_path:
+            change_type = "whisper.cpp path"
+            needs_restart = True
+        elif use_cpp and hasattr(self.transcriber, 'model_file_path') and self.transcriber.model_file_path != ggml_model_path:
+            change_type = "GGML model"
+            needs_restart = True
+        else:
+            change_type = "settings"
+            needs_restart = False
+            
+        if needs_restart:
+            # Show restart needed message in UI
+            restart_message = f"{change_type.capitalize()} changed - application restart required for changes to take effect"
+            self.logger.info(restart_message)
+            
+            # Show a proper dialog message box
+            messagebox.showinfo(
+                "Restart Required",
+                f"The {change_type} has been changed. This change requires restarting the application to take effect.\n\n"
+                "Please close and restart the application for the changes to be applied."
+            )
+            
+            # Update UI status as well
+            self.ui.update_status_text(restart_message)
+            
+            # Flash the status frame to indicate the change
+            self.ui.update_status_color("error")
+            self.ui.window.after(2000, lambda: self.ui.update_status_color("ready"))
+            
+            return
+            
+        # Handle minor settings changes that don't require restart
+        self.logger.info(f"Applied {change_type} changes without restart")
+        self.ui.update_status_text(f"{change_type.capitalize()} updated")
+        self.ui.update_status_color("ready")

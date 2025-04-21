@@ -6,15 +6,19 @@ authors = [
     {name = "Your Name", email = "your.email@example.com"}
 ]
 dependencies = [
-    "openai-whisper>=20231117",
     "pyaudio>=0.2.13",
     "keyboard>=0.13.5",
     "pyperclip>=1.8.2",
     "pydantic>=2.5.2",
     "ffmpeg-python>=0.2.0",  # For FFmpeg integration
+    "numpy>=1.24.0",         # Required for audio processing
 ]
 
 [project.optional-dependencies]
+whisper = [
+    "openai-whisper>=20231117",
+    "torch>=2.0.0",
+]
 dev = [
     "pytest>=7.4.0",
     "pytest-mock>=3.11.1",

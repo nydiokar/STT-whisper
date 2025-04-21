@@ -59,7 +59,7 @@ def initialize_app() -> tuple[Config, TranscriptionUI, ModelManager]:
     """
     # Setup logging first
     logger = setup_logging()
-    logger.info("Starting Voice Input Service")
+    logger.info("Application starting - initializing components")
     
     # Load configuration
     config = Config.load()
@@ -67,10 +67,11 @@ def initialize_app() -> tuple[Config, TranscriptionUI, ModelManager]:
     
     # Initialize UI first (needed for model dialogs)
     ui = TranscriptionUI()
+    logger.debug("UI components initialized")
     
     # Initialize ModelManager
     model_manager = ModelManager(ui.window, config)
-    logger.info("Model manager initialized")
+    logger.debug("Model manager initialized")
     
     return config, ui, model_manager
 
@@ -81,17 +82,21 @@ def main() -> None:
         sys.exit(1)
     
     try:
-        # Initialize core components
+        # Step 1: Initialize core components
         config, ui, model_manager = initialize_app()
         
-        # Initialize transcription engine
+        # Step 2: Initialize transcription engine
+        logger = logging.getLogger("VoiceService")
+        logger.info("Loading transcription engine")
         transcriber = model_manager.initialize_transcription_engine()
         if not transcriber:
+            logger.error("Transcription engine initialization failed - no model selected")
             print("\nNo transcription model was selected or model initialization failed.")
             print("Please run the application again and select a model.")
             sys.exit(1)
             
-        # Create service with initialized components
+        # Step 3: Create and run service
+        logger.info("Creating voice input service")
         service = VoiceInputService(config, ui, transcriber)
         service.run()
         

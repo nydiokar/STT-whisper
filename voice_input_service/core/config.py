@@ -1,7 +1,7 @@
 from __future__ import annotations
 import os
 from pathlib import Path
-from typing import Optional, Dict, Any, List, Union
+from typing import Optional, Union
 
 import pyaudio
 from pydantic import BaseModel, Field, field_validator
@@ -35,7 +35,7 @@ class AudioConfig(BaseModel):
 
 class TranscriptionConfig(BaseModel):
     """Transcription configuration."""
-    model_name: str = Field("turbo", description="Whisper model name (tiny, base, small, medium, large, turbo)")
+    model_name: str = Field("base", description="Whisper model name (tiny, base, small, medium, large)")
     device: Optional[str] = Field(None, description="Device to run model on (cpu, cuda)")
     compute_type: str = Field("float32", description="Computation type (float16, float32, int8)")
     language: Optional[str] = Field("en", description="Language code for transcription")
@@ -43,10 +43,15 @@ class TranscriptionConfig(BaseModel):
     cache_dir: Optional[str] = Field(None, description="Directory to cache models")
     min_chunk_size: int = Field(32000, description="Minimum audio chunk size to process (in bytes)")
     
+    # whisper.cpp specific options
+    use_cpp: bool = Field(True, description="Whether to use whisper.cpp instead of Python Whisper")
+    whisper_cpp_path: str = Field("C:\\Users\\Cicada38\\Projects\\whisper.cpp\\build\\bin\\Release\\whisper-cli.exe", description="Path to the whisper.cpp executable")
+    ggml_model_path: Optional[str] = Field(None, description="Path to specific GGML model file")
+    
     @field_validator('model_name')
     @classmethod
     def validate_model_name(cls, v: str) -> str:
-        valid_models = ["tiny", "base", "small", "medium", "large", "turbo"]
+        valid_models = ["tiny", "base", "small", "medium", "large"]
         if v.lower() not in valid_models:
             raise ValueError(f"Model name must be one of {valid_models}, got {v}")
         return v.lower()

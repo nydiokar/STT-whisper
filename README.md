@@ -164,3 +164,166 @@ Common Issues:
    - Try toggling between direct insertion and clipboard modes
    - Use Alt+V to manually paste if automatic insertion fails
    - Check application permissions for text input
+
+## Speech-to-Text Application
+
+This is a speech-to-text application that uses OpenAI's Whisper model for transcription. It supports both the Python Whisper model and the faster C++ implementation (whisper.cpp).
+
+### Features
+
+- Real-time speech-to-text transcription
+- Support for multiple transcription engines (Python Whisper or whisper.cpp)
+- Multiple model size options (tiny, base, small, medium, large)
+- Configurable hotkeys for recording control
+- Easy-to-use UI with configurable settings
+
+### Installation
+
+#### Prerequisites
+
+- Python 3.8 or higher
+- Git (for installing whisper.cpp)
+- C++ build environment (for building whisper.cpp)
+  - On Windows: Visual Studio or MinGW
+  - On Linux/macOS: GCC/Clang and Make
+
+#### Windows Quick Setup
+
+1. Run the automatic setup script:
+   ```batch
+   setup_windows.bat
+   ```
+
+2. This will:
+   - Clone the whisper.cpp repository to your home directory
+   - Build the whisper.cpp executable
+   - Download the necessary model files
+   - Configure the application to use whisper.cpp
+
+#### Manual Setup
+
+1. Install Python dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+2. Set up whisper.cpp:
+   ```bash
+   python scripts/install_whisper_cpp.py
+   ```
+
+3. Or run the fix script if you already have whisper.cpp installed:
+   ```bash
+   python scripts/fix_whisper_cpp.py
+   ```
+
+### Using whisper.cpp
+
+The application can use either the Python Whisper model or whisper.cpp for transcription. To use whisper.cpp:
+
+1. Make sure it's properly installed and built using one of the scripts above
+2. In the application settings, ensure "Use whisper.cpp" is enabled
+3. Select the appropriate GGML model file
+
+#### Troubleshooting
+
+If you encounter issues with the whisper.cpp integration:
+
+1. Run the diagnostic script:
+   ```bash
+   python scripts/fix_whisper_cpp.py
+   ```
+   This will help locate your models and executables and update the configuration.
+
+2. Check if the whisper.cpp executable can be found:
+   ```bash
+   python scripts/use_whisper_cpp.py
+   ```
+   This will test running whisper.cpp directly.
+
+3. Common issues:
+   - Executable not found: Make sure the whisper.cpp executable is built and the path is correct in settings
+   - Model not found: Ensure the GGML model files are downloaded and the path is correct
+   - Path issues: Use absolute paths in the configuration to avoid path resolution problems
+
+### Configuration
+
+The application configuration is stored in:
+```
+~/.voice_input_service/config.json
+```
+
+Key whisper.cpp settings:
+```json
+{
+  "transcription": {
+    "use_cpp": true,
+    "whisper_cpp_path": "/path/to/whisper.cpp/main",
+    "ggml_model_path": "/path/to/models/ggml-base.en.bin"
+  }
+}
+```
+
+## Whisper.cpp Setup (Windows)
+
+1. **Install Visual Studio**:
+   - Download Visual Studio 2022 Community from: https://visualstudio.microsoft.com/vs/community/
+   - During installation, select "Desktop development with C++"
+
+2. **Open Developer Command Prompt**:
+   - Press Start
+   - Search for "Developer Command Prompt for VS 2022"
+   - Right-click and "Run as administrator"
+
+3. **Get whisper.cpp**:
+   ```cmd
+   cd /d %USERPROFILE%
+   git clone https://github.com/ggerganov/whisper.cpp
+   cd whisper.cpp
+   ```
+
+4. **Build the library** (in the same Developer Command Prompt):
+   ```cmd
+   mkdir build
+   cd build
+   cmake .. -DBUILD_SHARED_LIBS=ON
+   cmake --build . --config Release
+   ```
+
+5. **Download Model**:
+   ```cmd
+   mkdir models
+   cd models
+   curl -L https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin --output ggml-base.en.bin
+   ```
+
+After building, you'll find:
+- The DLL at `build/bin/Release/whisper.dll`
+- Header files in the `whisper.cpp/include` directory
+
+Important Notes:
+- Make sure you use the "Developer Command Prompt for VS 2022", NOT regular PowerShell or Command Prompt
+- We build with `BUILD_SHARED_LIBS=ON` to create a DLL that can be used by our Python application
+- The library and model files need to be accessible to our Python application
+- You'll need to ensure your Python bindings can find and load the DLL
+
+## Whisper.cpp Integration
+
+This application supports using whisper.cpp as a faster alternative to the Python Whisper implementation.
+
+### Setup Instructions
+
+Follow these steps to set up whisper.cpp on Windows:
+
+1. **View Setup Guide**: Run `scripts/setup_guide.bat` for detailed instructions on how to download, build, and set up whisper.cpp.
+
+2. **Configure**: After setting up whisper.cpp, run `scripts/setup_easy.bat` to update your configuration with the correct paths.
+
+That's it! Once configured, the application will automatically use whisper.cpp for transcription.
+
+### Performance Benefits
+
+Using whisper.cpp provides significant performance improvements:
+- Up to 4x faster transcription speed
+- Much lower memory usage
+- Better real-time performance

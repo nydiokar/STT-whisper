@@ -1,11 +1,13 @@
 from __future__ import annotations
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, filedialog
 import os
 import logging
 import threading
 import time
 from typing import Optional, Dict, Any, List, Callable
+
+from voice_input_service.core.config import Config
 
 class ModelSelectionDialog:
     """Dialog for model selection when a model is missing."""
@@ -361,4 +363,233 @@ class DownloadProgressDialog:
             if self.dialog.winfo_exists():
                 self.dialog.destroy()
         except Exception as e:
-            self.logger.error(f"Error closing progress dialog: {e}") 
+            self.logger.error(f"Error closing progress dialog: {e}")
+
+class SettingsDialog:
+    """Dialog for application settings."""
+    
+    def __init__(self, parent: tk.Tk, config: 'Config', on_save: callable = None):
+        """Initialize the settings dialog.
+        
+        Args:
+            parent: Parent window
+            config: Application configuration
+            on_save: Callback to call when settings are saved
+        """
+        self.logger = logging.getLogger("VoiceService.SettingsDialog")
+        self.parent = parent
+        self.config = config
+        self.on_save = on_save
+        
+        # Create a new toplevel window
+        self.dialog = tk.Toplevel(parent)
+        self.dialog.title("Settings")
+        self.dialog.geometry("550x500")
+        self.dialog.transient(parent)
+        self.dialog.grab_set()
+        
+        # Set up variables
+        self.use_cpp_var = tk.BooleanVar(value=config.transcription.use_cpp)
+        self.whisper_cpp_path_var = tk.StringVar(value=config.transcription.whisper_cpp_path)
+        self.ggml_model_var = tk.StringVar(value=config.transcription.ggml_model_path or "")
+        
+        # Collect available GGML models
+        self.ggml_models = self._find_ggml_models()
+        
+        # Set up UI
+        self._setup_ui()
+        
+    def _find_ggml_models(self) -> List[str]:
+        """Find available GGML model files.
+        
+        Returns:
+            List of full paths to GGML model files
+        """
+        models = []
+        
+        # Check models directory
+        try:
+            # Use absolute project path to models directory
+            models_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "models")
+            self.logger.debug(f"Looking for GGML models in: {models_dir}")
+            
+            if os.path.exists(models_dir):
+                for filename in os.listdir(models_dir):
+                    if filename.endswith(".bin") and filename.startswith("ggml-"):
+                        full_path = os.path.join(models_dir, filename)
+                        file_size_mb = os.path.getsize(full_path) / (1024 * 1024)
+                        self.logger.debug(f"Found GGML model: {filename} ({file_size_mb:.1f} MB)")
+                        models.append(os.path.join(models_dir, filename))
+        except Exception as e:
+            self.logger.error(f"Error finding GGML models: {e}")
+            
+        return models
+        
+    def _setup_ui(self):
+        """Set up the dialog UI."""
+        notebook = ttk.Notebook(self.dialog)
+        notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        # Transcription tab
+        transcription_frame = ttk.Frame(notebook, padding="10")
+        notebook.add(transcription_frame, text="Transcription")
+        
+        # Engine selection
+        engine_frame = ttk.LabelFrame(transcription_frame, text="Speech Recognition Engine", padding="10")
+        engine_frame.pack(fill=tk.X, pady=5)
+        
+        # Whisper.cpp option
+        use_cpp_check = ttk.Checkbutton(
+            engine_frame, 
+            text="Use whisper.cpp (faster, lower resource usage)",
+            variable=self.use_cpp_var,
+            command=self._toggle_cpp_options
+        )
+        use_cpp_check.pack(anchor="w", pady=5)
+        
+        # Whisper.cpp options frame
+        self.cpp_options_frame = ttk.Frame(engine_frame)
+        self.cpp_options_frame.pack(fill=tk.X, pady=5)
+        
+        # GGML Model selection
+        model_frame = ttk.Frame(self.cpp_options_frame)
+        model_frame.pack(fill=tk.X, pady=5)
+        
+        model_label = ttk.Label(model_frame, text="GGML Model:")
+        model_label.pack(side=tk.LEFT, padx=5)
+        
+        # Create model dropdown
+        model_options = []
+        for model_path in self.ggml_models:
+            filename = os.path.basename(model_path)
+            size_mb = os.path.getsize(model_path) / (1024 * 1024)
+            option_text = f"{filename} ({size_mb:.1f} MB)"
+            model_options.append((option_text, model_path))
+        
+        # Add a special "Auto-select best model" option
+        model_options.insert(0, ("Auto-select best model", ""))
+        
+        # Create variable to track selected model display text
+        self.model_display_var = tk.StringVar()
+        
+        # Set initial display value
+        if self.ggml_model_var.get():
+            for display_text, path in model_options:
+                if path == self.ggml_model_var.get():
+                    self.model_display_var.set(display_text)
+                    break
+        else:
+            self.model_display_var.set(model_options[0][0])
+        
+        # Create the dropdown
+        model_dropdown = ttk.Combobox(
+            model_frame,
+            textvariable=self.model_display_var,
+            values=[display_text for display_text, _ in model_options],
+            width=40,
+            state="readonly"
+        )
+        model_dropdown.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
+        
+        # Handle selection changes
+        def on_model_select(event):
+            selection = self.model_display_var.get()
+            for display_text, path in model_options:
+                if display_text == selection:
+                    self.ggml_model_var.set(path)
+                    break
+                    
+        model_dropdown.bind("<<ComboboxSelected>>", on_model_select)
+        
+        # Whisper.cpp path
+        path_frame = ttk.Frame(self.cpp_options_frame)
+        path_frame.pack(fill=tk.X, pady=5)
+        
+        path_label = ttk.Label(path_frame, text="whisper.cpp executable path:")
+        path_label.pack(side=tk.LEFT, padx=5)
+        
+        path_entry = ttk.Entry(path_frame, textvariable=self.whisper_cpp_path_var, width=30)
+        path_entry.pack(side=tk.LEFT, padx=5, expand=True, fill=tk.X)
+        
+        browse_button = ttk.Button(path_frame, text="Browse...", command=self._browse_executable)
+        browse_button.pack(side=tk.RIGHT, padx=5)
+        
+        # Disclaimer
+        disclaimer = ttk.Label(
+            engine_frame, 
+            text="Note: Using whisper.cpp requires downloading the GGML model files (.bin) "
+                 "and the whisper.cpp executable. See https://github.com/ggml-org/whisper.cpp",
+            wraplength=400,
+            justify="left",
+            foreground="gray"
+        )
+        disclaimer.pack(fill=tk.X, pady=10)
+        
+        # Model information
+        info_frame = ttk.LabelFrame(transcription_frame, text="GGML Model Information", padding="10")
+        info_frame.pack(fill=tk.X, pady=10)
+        
+        info_text = tk.Text(info_frame, height=6, wrap=tk.WORD)
+        info_text.pack(fill=tk.X, expand=True)
+        
+        info_text.insert(tk.END, 
+            "Available GGML model variants:\n\n"
+            "- Base models: ggml-{size}.bin (e.g., ggml-base.bin)\n"
+            "- English-only models: ggml-{size}.en.bin (e.g., ggml-base.en.bin)\n" 
+            "- Quantized models: ggml-{size}-q5_1.bin (e.g., ggml-base-q5_1.bin)\n\n"
+            "Quantized models (q5_1, q8_0) are smaller and faster with minimal quality loss."
+        )
+        info_text.config(state=tk.DISABLED)
+        
+        # Buttons
+        button_frame = ttk.Frame(self.dialog)
+        button_frame.pack(fill=tk.X, padx=10, pady=10)
+        
+        save_button = ttk.Button(button_frame, text="Save", command=self._on_save)
+        save_button.pack(side=tk.RIGHT, padx=5)
+        
+        cancel_button = ttk.Button(button_frame, text="Cancel", command=self._on_cancel)
+        cancel_button.pack(side=tk.RIGHT, padx=5)
+        
+        # Initial state
+        self._toggle_cpp_options()
+        
+    def _toggle_cpp_options(self):
+        """Toggle visibility of whisper.cpp options based on checkbox."""
+        if self.use_cpp_var.get():
+            self.cpp_options_frame.pack(fill=tk.X, pady=5)
+        else:
+            self.cpp_options_frame.pack_forget()
+        
+    def _browse_executable(self):
+        """Browse for whisper.cpp executable."""
+        file_path = filedialog.askopenfilename(
+            title="Select whisper.cpp executable",
+            filetypes=[
+                ("Executable files", "*.exe"),
+                ("All files", "*.*")
+            ]
+        )
+        if file_path:
+            self.whisper_cpp_path_var.set(file_path)
+            
+    def _on_save(self):
+        """Save settings and close dialog."""
+        # Update config
+        self.config.transcription.use_cpp = self.use_cpp_var.get()
+        self.config.transcription.whisper_cpp_path = self.whisper_cpp_path_var.get()
+        self.config.transcription.ggml_model_path = self.ggml_model_var.get()
+        
+        # Save to file
+        self.config.save()
+        
+        # Call callback if provided
+        if self.on_save:
+            self.on_save()
+            
+        self.logger.info("Settings saved")
+        self.dialog.destroy()
+        
+    def _on_cancel(self):
+        """Cancel and close dialog."""
+        self.dialog.destroy() 
