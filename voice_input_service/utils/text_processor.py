@@ -139,7 +139,7 @@ class TextProcessor:
             
         # Check word count
         word_count = len(text.split())
-        if word_count <= self.min_words:
+        if word_count < self.min_words:
             self.logger.debug(f"Utterance too short: {word_count} words")
             return False
             

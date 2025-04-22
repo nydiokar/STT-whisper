@@ -2,7 +2,7 @@ from __future__ import annotations
 import threading
 import queue
 import logging
-from typing import Callable, Optional, Literal, Dict, Any, Union
+from typing import Callable, Optional, Literal, Dict, Any, Union, Tuple
 import time
 import numpy as np
 
@@ -42,22 +42,22 @@ class TranscriptionWorker(Component):
     
     def __init__(
         self, 
-        process_func: Callable[[bytes], Optional[str]],
-        on_result: Callable[[str], None],
+        process_func: Callable[[bytes], Optional[Tuple[str, float]]],
+        on_result: Callable[[str, float], None],
         config: Config,
         initial_continuous_mode: bool = False,
         completion_callback: Optional[Callable[[], None]] = None,
-        on_final_result: Optional[Callable[[str], None]] = None # Callback for final non-cont result
+        on_final_result: Optional[Callable[[str, float], None]] = None
     ) -> None:
         """Initialize the worker.
         
         Args:
-            process_func: Function that processes audio data and returns text
-            on_result: Callback for when text is transcribed
+            process_func: Function that processes audio data and returns text (receives text, duration)
+            on_result: Callback for when text is transcribed (receives text, duration)
             config: Application configuration
             initial_continuous_mode: Initial continuous mode state
             completion_callback: Callback to call when the worker stops
-            on_final_result: Callback for the result of the final non-continuous chunk
+            on_final_result: Callback for the result of the final non-continuous chunk (receives text, duration)
         """
         self.logger = logging.getLogger("VoiceService.Worker")
         self.process_func = process_func
@@ -65,7 +65,7 @@ class TranscriptionWorker(Component):
         self.config = config
         self.continuous_mode = initial_continuous_mode
         self.completion_callback = completion_callback
-        self.on_final_result = on_final_result # Store final result callback
+        self.on_final_result = on_final_result
         
         # Extract settings from config
         self.min_audio_length = config.audio.min_audio_length
@@ -324,31 +324,36 @@ class TranscriptionWorker(Component):
 
         # --- Process Final Non-Continuous Chunk (if any) --- 
         final_result_text: Optional[str] = None
+        final_result_duration: float = 0.0
         if final_chunk_to_process:
             self.logger.info(f"Processing final non-continuous chunk ({len(final_chunk_to_process)/1024:.1f} KB)...")
             if len(final_chunk_to_process) >= self.min_chunk_size:
                 try:
-                    # Use the main process_func
-                    final_result_text = self.process_func(final_chunk_to_process)
-                    if final_result_text and self.on_final_result:
-                        self.logger.debug(f"Sending final non-continuous result: {final_result_text}")
-                        self.on_final_result(final_result_text)
-                    elif not final_result_text:
-                        self.logger.warning("Final non-continuous chunk processing yielded no text.")
-                        # Still call final result callback with empty string? Or None?
-                        # Let's call it with empty string to signal completion.
-                        if self.on_final_result:
-                            self.on_final_result("") 
+                    # Use the main process_func, expect tuple
+                    result_tuple = self.process_func(final_chunk_to_process)
+                    if result_tuple:
+                        final_result_text = result_tuple[0]
+                        final_result_duration = result_tuple[1]
+                    else:
+                        final_result_text = "" # Ensure empty string if process_func returns None
+                        final_result_duration = 0.0
+
+                    # Call final result callback if it exists, pass duration
+                    if self.on_final_result:
+                        self.logger.debug(f"Sending final non-continuous result: '{final_result_text}' ({final_result_duration:.2f}s)")
+                        self.on_final_result(final_result_text, final_result_duration)
                 except Exception as e:
                     self.logger.error(f"Error processing final non-continuous chunk: {e}")
-                    # Call final result callback with empty string on error?
+                    # Call final result callback with empty string and 0 duration on error?
                     if self.on_final_result:
-                        self.on_final_result("") 
+                        self.logger.warning("Calling on_final_result with empty string due to processing error.")
+                        self.on_final_result("", 0.0)
             else:
                 self.logger.info("Skipping final non-continuous chunk processing (too short).")
-                # Call final result callback with empty string?
+                # Call final result callback with empty string and 0 duration?
                 if self.on_final_result:
-                    self.on_final_result("")
+                    self.logger.debug("Calling on_final_result with empty string for short final chunk.")
+                    self.on_final_result("", 0.0)
         # --- End Final Chunk Processing ---
 
         # Call completion callback if provided, after the loop and final processing finishes
@@ -361,7 +366,7 @@ class TranscriptionWorker(Component):
         # --- End Worker Completion ---
     
     def _process_chunk(self, audio_data: bytes) -> None:
-        """Process a chunk of audio data."""
+        """Process a chunk of audio data intended for intermediate results."""
         current_time = time.time()
         audio_len = len(audio_data)
         
@@ -376,15 +381,24 @@ class TranscriptionWorker(Component):
             
         self.last_process_time = current_time
         
-        self.logger.info(f"Processing audio chunk ({audio_len/1024:.1f} KB)") # Changed level to INFO for visibility
+        self.logger.info(f"Processing intermediate audio chunk ({audio_len/1024:.1f} KB)") # Clarify intermediate
         
-        # Process the audio data 
-        result = self.process_func(audio_data)
-        
-        # Send result if available
-        if result:
-            self.logger.debug(f"Got transcription result: {result}")
-            self.on_result(result)
+        result_tuple = None
+        try:
+            # Process the audio data, expect tuple
+            result_tuple = self.process_func(audio_data)
+        except Exception as e:
+            self.logger.error(f"Error during process_func in _process_chunk: {e}", exc_info=True)
+            return # Don't proceed if processing failed
+
+        # Send result if available, unpack tuple
+        if result_tuple:
+            try:
+                result_text, result_duration = result_tuple
+                self.logger.debug(f"Got intermediate transcription result: '{result_text}' ({result_duration:.2f}s)")
+                self.on_result(result_text, result_duration) # Pass both text and duration
+            except Exception as e:
+                self.logger.error(f"Error during on_result callback in _process_chunk: {e}", exc_info=True)
     
     def update_vad_settings(self) -> None:
         """Update Voice Activity Detection settings from config."""

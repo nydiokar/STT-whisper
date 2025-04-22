@@ -36,6 +36,8 @@ class TranscriptionEngine:
         language: str = "en",
         use_cpp: bool = False,
         whisper_cpp_path: str = "./main",
+        model_file_path: Optional[str] = None,
+        cache_dir: Optional[str] = None
     ):
         """Initialize Whisper model for transcription.
 
@@ -45,6 +47,11 @@ class TranscriptionEngine:
             language: Language used for transcription
             use_cpp: Whether to use whisper.cpp instead of Python Whisper
             whisper_cpp_path: Path to the whisper.cpp executable
+            model_file_path: Path to the specific GGML model file (for whisper.cpp)
+            cache_dir: Directory to cache models (for Python Whisper)
+            
+        Raises:
+            ModelError: If initialization fails due to model loading or configuration errors.
         """
         self.logger = logging.getLogger(__name__)
         self.model_name = model_name
@@ -53,27 +60,57 @@ class TranscriptionEngine:
         self.model = None
         self.use_cpp = use_cpp
         self.whisper_cpp_path = whisper_cpp_path
-        self.model_file_path = None  # Initialize to avoid attribute errors
-        self.initialization_error = None  # Store initialization errors
+        self.model_file_path = model_file_path
+        self.cache_dir = cache_dir
+        self.initialization_error = None
+        self.loaded = False
+        
+        # Determine device if auto
+        if self.device == "auto":
+            if torch.cuda.is_available():
+                self.device = "cuda"
+                self.logger.info("CUDA available. Using GPU for transcription.")
+            else:
+                self.device = "cpu"
+                self.logger.info("CUDA not available. Using CPU for transcription.")
         
         # Force use_cpp if whisper is not available
         if not WHISPER_AVAILABLE and not use_cpp:
-            self.logger.warning("Python Whisper is not available. Forcing use of whisper.cpp")
+            self.logger.warning("Python Whisper library not available. Forcing use of whisper.cpp")
             self.use_cpp = True
         
-        # Don't initialize whisper.cpp model (will be loaded on-demand)
-        if not self.use_cpp:
-            # Check if we're using CPU and warn about large model
-            if self.device == "cpu" and self.model_name == "large":
-                self.logger.warning(
-                    "Using 'large' model on CPU will be very slow. Consider using 'medium' or 'small' "
-                    "model for better performance on CPU."
-                )
-            
-            # Don't load model yet - just set up parameters
-            self.logger.debug(f"Transcription engine initialized with model '{model_name}' (not loaded yet)")
-        else:
-            self.logger.debug(f"Using whisper.cpp with model '{model_name}'")
+        # --- Load Model or Check whisper.cpp Setup --- 
+        try:
+            if self.use_cpp:
+                # Verify whisper.cpp executable exists
+                if not os.path.exists(self.whisper_cpp_path):
+                    raise FileNotFoundError(f"Whisper.cpp executable not found at: {self.whisper_cpp_path}")
+                # Verify GGML model path is provided and exists
+                if not self.model_file_path or not os.path.exists(self.model_file_path):
+                    raise FileNotFoundError(f"GGML model file not found or not specified: {self.model_file_path}")
+                self.logger.info(f"whisper.cpp setup verified. Model: {os.path.basename(self.model_file_path)}")
+                self.loaded = True
+            else:
+                # Check if we're using CPU and warn about large model
+                if self.device == "cpu" and self.model_name == "large":
+                    self.logger.warning(
+                        "Using 'large' model on CPU will be very slow. Consider using 'medium' or 'small' "
+                        "model for better performance on CPU."
+                    )
+                
+                # Try loading the Python Whisper model
+                if not WHISPER_AVAILABLE:
+                     raise ImportError("Python Whisper library is required but not installed.")
+                self._load_model()
+                self.loaded = True
+
+        except (FileNotFoundError, ImportError, ModelError, Exception) as e:
+            error_msg = f"Failed to initialize transcription engine: {e}"
+            self.logger.error(error_msg, exc_info=True)
+            self.initialization_error = str(e)
+            self.loaded = False
+            raise ModelError(error_msg) from e 
+        # --- End Load Model --- 
 
     def _load_model(self) -> None:
         """Load the Whisper model.
@@ -129,6 +166,7 @@ class TranscriptionEngine:
             )
             self.logger.info(f"Successfully loaded model '{self.model_name}'")
             self.initialization_error = None  # Clear any previous errors
+            self.loaded = True # Set loaded flag on success
         except Exception as e:
             error_msg = f"Failed to load model '{self.model_name}': {e}"
             self.logger.error(error_msg)
@@ -155,6 +193,12 @@ class TranscriptionEngine:
         Raises:
             ModelError: If transcription fails due to model issues
         """
+        # --- Handle Empty Input --- 
+        if not audio:
+            self.logger.debug("Received empty audio data, returning empty result.")
+            return {"text": ""}
+        # --- End Empty Input --- 
+            
         try:
             # Log length of audio for debugging
             audio_data_np = np.frombuffer(audio, dtype=np.int16)
@@ -212,6 +256,11 @@ class TranscriptionEngine:
                 options = dict(language=self.language)
                 if prompt:
                     options["initial_prompt"] = prompt
+                # Add task based on translate flag
+                if hasattr(self, 'translate') and self.translate:
+                    options["task"] = "translate"
+                else:
+                    options["task"] = "transcribe"
 
                 # Convert bytes to float32 array that Whisper expects
                 audio_data = audio_data_np.astype(np.float32) / 32768.0

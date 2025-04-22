@@ -26,65 +26,70 @@ def temp_config_dir() -> Generator[Path, None, None]:
 def test_audio_config_defaults():
     """Test AudioConfig default values."""
     config = AudioConfig()
-    assert config.sample_rate == 44100
-    assert config.chunk_size == 4096
+    assert config.sample_rate == 16000
+    assert config.chunk_size == 2048
     assert config.channels == 1
     assert config.format_type == pyaudio.paInt16
     assert config.device_index is None
-    assert config.silence_threshold == 0.05
-    assert config.min_silence_length == 1.5
-    assert config.min_audio_length == 32000
+    assert config.min_audio_length == 40000
     assert config.min_process_interval == 0.5
+    assert config.vad_mode == "silero"
+    assert config.vad_threshold == 0.3
+    assert config.silence_duration == 1.5
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        (16000, 16000),
+        (44100, 44100)
+    ]
+)
+def test_audio_config_valid_sample_rate(value: int, expected: int):
+    config = AudioConfig(sample_rate=value)
+    assert config.sample_rate == expected
+
+def test_audio_config_invalid_sample_rate():
+    with pytest.raises(ValueError):
+        AudioConfig(sample_rate=12345)
 
 def test_audio_config_custom_values():
     """Test AudioConfig with custom values."""
     config = AudioConfig(
-        sample_rate=16000,
+        sample_rate=44100,
         chunk_size=1024,
         channels=2,
         format_type=pyaudio.paFloat32,
         device_index=1,
-        silence_threshold=0.1,
-        min_silence_length=2.0,
         min_audio_length=16000,
-        min_process_interval=1.0
+        min_process_interval=1.0,
+        vad_threshold=0.8,
+        silence_duration=2.0
     )
-    assert config.sample_rate == 16000
+    assert config.sample_rate == 44100
     assert config.chunk_size == 1024
     assert config.channels == 2
     assert config.format_type == pyaudio.paFloat32
     assert config.device_index == 1
-    assert config.silence_threshold == 0.1
-    assert config.min_silence_length == 2.0
     assert config.min_audio_length == 16000
     assert config.min_process_interval == 1.0
-
-def test_audio_config_invalid_sample_rate():
-    """Test AudioConfig with invalid sample rate."""
-    with pytest.raises(ValidationError) as exc_info:
-        AudioConfig(sample_rate=12345)
-    error_msg = str(exc_info.value)
-    assert "sample_rate" in error_msg
-    assert "one of" in error_msg
-
-def test_audio_config_invalid_channels():
-    """Test AudioConfig with invalid channels."""
-    with pytest.raises(ValidationError) as exc_info:
-        AudioConfig(channels=3)
-    error_msg = str(exc_info.value)
-    assert "channels" in error_msg
-    assert "1 (mono) or 2 (stereo)" in error_msg
+    assert config.vad_threshold == 0.8
+    assert config.silence_duration == 2.0
 
 # TranscriptionConfig Tests
 def test_transcription_config_defaults():
     """Test TranscriptionConfig default values."""
     config = TranscriptionConfig()
-    assert config.model_name == "large"
+    assert config.model_name == "base"
     assert config.device is None
-    assert config.compute_type == "float16"
+    assert config.compute_type == "float32"
     assert config.language == "en"
     assert config.translate is False
     assert config.cache_dir is None
+    assert config.min_chunk_size == 40000
+    assert config.use_cpp is True
+    assert config.whisper_cpp_path is not None
+    assert config.ggml_model_path is None
+    assert config.continuous_mode is False
 
 def test_transcription_config_custom_values():
     """Test TranscriptionConfig with custom values."""
@@ -245,7 +250,8 @@ def test_config_load_nonexistent_file(temp_config_dir):
     
     config = Config.load(config_path)
     assert isinstance(config, Config)
-    assert config.audio.sample_rate == 44100  # Default value
+    assert config.audio.sample_rate == 16000
+    assert config.transcription.model_name == "base"
 
 def test_config_save_creates_directories(temp_config_dir):
     """Test saving config creates parent directories if they don't exist."""

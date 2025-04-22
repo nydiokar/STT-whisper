@@ -77,31 +77,116 @@ def test_main_microphone_check_failed(capsys):
 
 def test_main_success():
     """Test successful main function execution."""
-    with patch('voice_input_service.__main__.check_microphone', return_value=True):
-        with patch('voice_input_service.__main__.VoiceInputService') as mock_service:
-            main()
-            
-            mock_service.assert_called_once()
-            mock_service.return_value.run.assert_called_once()
+    # Patch check_microphone to return True
+    with patch('voice_input_service.__main__.check_microphone', return_value=True),\
+         patch('voice_input_service.__main__.initialize_app') as mock_init_app,\
+         patch('voice_input_service.__main__.VoiceInputService') as mock_voice_service:
+
+        # Mock initialize_app return values
+        mock_config = Mock()
+        mock_ui = Mock()
+        mock_model_manager = Mock()
+        mock_transcriber = Mock() # Mock the transcriber engine
+        mock_model_manager.initialize_transcription_engine.return_value = mock_transcriber
+        mock_init_app.return_value = (mock_config, mock_ui, mock_model_manager)
+
+        # Mock the service instance
+        mock_service_instance = Mock()
+        mock_voice_service.return_value = mock_service_instance
+
+        # Call main
+        main()
+
+        # Assertions
+        mock_init_app.assert_called_once()
+        mock_model_manager.initialize_transcription_engine.assert_called_once()
+        mock_voice_service.assert_called_once_with(mock_config, mock_ui, mock_transcriber)
+        mock_service_instance.run.assert_called_once()
 
 def test_main_keyboard_interrupt(capsys):
     """Test main function with keyboard interrupt."""
-    with patch('voice_input_service.__main__.check_microphone', return_value=True):
-        with patch('voice_input_service.__main__.VoiceInputService') as mock_service:
-            mock_service.return_value.run.side_effect = KeyboardInterrupt()
-            
-            main()
-            
-            captured = capsys.readouterr()
-            assert "Service stopped by user" in captured.out
+    with patch('voice_input_service.__main__.check_microphone', return_value=True),\
+         patch('voice_input_service.__main__.initialize_app') as mock_init_app,\
+         patch('voice_input_service.__main__.VoiceInputService') as mock_voice_service:
+
+        # Mock initialize_app return values
+        mock_config = Mock()
+        mock_ui = Mock()
+        mock_model_manager = Mock()
+        mock_transcriber = Mock()
+        mock_model_manager.initialize_transcription_engine.return_value = mock_transcriber
+        mock_init_app.return_value = (mock_config, mock_ui, mock_model_manager)
+
+        # Mock the service instance to raise KeyboardInterrupt
+        mock_service_instance = Mock()
+        mock_service_instance.run.side_effect = KeyboardInterrupt()
+        mock_voice_service.return_value = mock_service_instance
+
+        # Call main
+        main()
+
+        # Assertions
+        captured = capsys.readouterr()
+        assert "Service stopped by user" in captured.out
+        mock_init_app.assert_called_once()
+        mock_model_manager.initialize_transcription_engine.assert_called_once()
+        mock_voice_service.assert_called_once_with(mock_config, mock_ui, mock_transcriber)
+        mock_service_instance.run.assert_called_once()
 
 def test_main_error(capsys):
-    """Test main function with error."""
-    with patch('voice_input_service.__main__.check_microphone', return_value=True):
-        with patch('voice_input_service.__main__.VoiceInputService') as mock_service:
-            mock_service.return_value.run.side_effect = Exception("Test error")
-            
+    """Test main function with error during service run."""
+    with patch('voice_input_service.__main__.check_microphone', return_value=True),\
+         patch('voice_input_service.__main__.initialize_app') as mock_init_app,\
+         patch('voice_input_service.__main__.VoiceInputService') as mock_voice_service:
+
+        # Mock initialize_app return values
+        mock_config = Mock()
+        mock_ui = Mock()
+        mock_model_manager = Mock()
+        mock_transcriber = Mock()
+        mock_model_manager.initialize_transcription_engine.return_value = mock_transcriber
+        mock_init_app.return_value = (mock_config, mock_ui, mock_model_manager)
+
+        # Mock the service instance to raise an error
+        mock_service_instance = Mock()
+        mock_service_instance.run.side_effect = Exception("Test error")
+        mock_voice_service.return_value = mock_service_instance
+
+        # Expect SystemExit when main encounters an error
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+
+        # Assertions
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        assert "Error: Test error" in captured.out
+        mock_init_app.assert_called_once()
+        mock_model_manager.initialize_transcription_engine.assert_called_once()
+        mock_voice_service.assert_called_once_with(mock_config, mock_ui, mock_transcriber)
+        mock_service_instance.run.assert_called_once()
+
+def test_main_engine_init_fails(capsys):
+    """Test main function when transcription engine fails to initialize."""
+    with patch('voice_input_service.__main__.check_microphone', return_value=True),\
+         patch('voice_input_service.__main__.initialize_app') as mock_init_app,\
+         patch('voice_input_service.__main__.VoiceInputService') as mock_voice_service: # Patch service anyway
+
+        # Mock initialize_app return values
+        mock_config = Mock()
+        mock_ui = Mock()
+        mock_model_manager = Mock()
+        # Make engine initialization return None
+        mock_model_manager.initialize_transcription_engine.return_value = None 
+        mock_init_app.return_value = (mock_config, mock_ui, mock_model_manager)
+
+        # Expect SystemExit
+        with pytest.raises(SystemExit) as exc_info:
             main()
             
-            captured = capsys.readouterr()
-            assert "Error: Test error" in captured.out 
+        # Assertions
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        assert "No transcription model was selected" in captured.out
+        mock_init_app.assert_called_once()
+        mock_model_manager.initialize_transcription_engine.assert_called_once()
+        mock_voice_service.assert_not_called() # Service should not be created 
