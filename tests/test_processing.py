@@ -243,16 +243,28 @@ def test_worker_continuous_mode_processing(mock_time, worker, mock_config, mock_
     start_time = 1000.0
     mock_time.side_effect = [
         start_time,         # Worker loop start time check
-        start_time + 0.01,  # Time check inside loop before get
-        start_time + 0.02,  # Time check for is_silent VAD check
-        start_time + 0.03,  # Time check for time_since_speech
-        start_time + 0.1,   # time.time() in _process_chunk start
-        start_time + 0.5,   # time.time() in _process_chunk end (simulates 0.4s processing)
-        start_time + 0.6,   # Next loop iteration time check
-        start_time + 0.61,  # Time check inside loop before get
-        start_time + 0.7,   # Next loop iteration time check (simulating silence)
-        start_time + 1.0,   # Time check for silence detection
-        start_time + 1.1    # Time check for time_since_speech > silence_duration
+        start_time + 0.01,  # Time check inside loop before get (updates last_speech_time approx)
+        start_time + 0.02,  # Time check for is_silent VAD check (speech)
+        start_time + 0.03,  # Time check for time_since_speech check (speech)
+        # Add speech chunk time: 0.01 - 0.03
+
+        start_time + 0.1,   # Next loop iteration time check
+        start_time + 0.11,  # Time check inside loop before get (silence arrives)
+        start_time + 0.12,  # Time check for is_silent VAD check (silence)
+        start_time + 0.13,  # Time check for time_since_speech check (silence), value = 0.13 - 0.01 = 0.12 < 1.5 - NO PROCESS
+        # Add silence chunk time: 0.11 - 0.13
+
+        start_time + 1.0,   # Next loop iteration time check (queue empty)
+        start_time + 1.01,  # Time check in queue.Empty block, time_since_speech = 1.01 - 0.01 = 1.0 < 1.5 - NO PROCESS
+
+        start_time + 1.6,   # Next loop iteration time check (queue empty)
+        start_time + 1.61,  # Time check in queue.Empty block, time_since_speech = 1.61 - 0.01 = 1.6 > 1.5 - PROCESS TRIGGERED!
+
+        start_time + 1.7,   # time.time() in _process_chunk start
+        start_time + 2.1,   # time.time() in _process_chunk end (simulates 0.4s processing)
+        start_time + 2.2,   # Time check after processing (resets last_speech_time to 2.2)
+
+        start_time + 2.3    # Final time check before stop
     ]
 
     # Configure silence detector - first speech, then silence
