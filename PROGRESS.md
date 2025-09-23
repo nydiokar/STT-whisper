@@ -12,7 +12,7 @@
 |-------|--------|----------|------------|-------|
 | Phase 0: Repository Setup | ✅ Complete | 6/6 | ~1h | Restructuring done, Android Studio pending |
 | Phase 1: Core Logic MVP | ✅ Complete | 5/5 | ~2h | All core logic ported & verified |
-| Phase 2: Audio + Transcription | 🚧 In Progress | 1/6 | ~0.5h | AudioRecorder.kt complete |
+| Phase 2: Audio + Transcription | 🚧 In Progress | 3/6 | ~1h | Audio + Whisper stub ready |
 | Phase 3: VAD Integration | ⬜ Not Started | 0/4 | 0h | - |
 | Phase 4: Full Integration | ⬜ Not Started | 0/4 | 0h | - |
 | Phase 5: IME Implementation | ⬜ Not Started | 0/6 | 0h | - |
