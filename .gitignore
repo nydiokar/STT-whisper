@@ -1,3 +1,4 @@
+# Python
 .pytest_cache
 __pycache__
 *.pyc
@@ -9,5 +10,40 @@ __pycache__
 venv/
 *.coverage
 htmlcov/
-plans/
+desktop/.venv/
+
+# Android
+*.iml
+.gradle
+.idea/
+local.properties
+*.apk
+*.ap_
+*.aab
+*.dex
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/.idea/
+
+# Models (large files - use Git LFS or download separately)
 models/
+*.bin
+*.onnx
+android/app/src/main/assets/models/*.bin
+!android/app/src/main/assets/models/.gitkeep
+
+# IDE
+.vscode/
+.idea/
+
+# Misc
+plans/
+*.log
+.DS_Store
