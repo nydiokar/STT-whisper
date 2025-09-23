@@ -11,7 +11,7 @@
 | Phase | Status | Progress | Time Spent | Notes |
 |-------|--------|----------|------------|-------|
 | Phase 0: Repository Setup | ✅ Complete | 6/6 | ~1h | Restructuring done, Android Studio pending |
-| Phase 1: Core Logic MVP | ⬜ Not Started | 0/5 | 0h | - |
+| Phase 1: Core Logic MVP | 🚧 In Progress | 1/5 | ~1h | TextProcessor.kt ported |
 | Phase 2: Audio + Transcription | ⬜ Not Started | 0/6 | 0h | - |
 | Phase 3: VAD Integration | ⬜ Not Started | 0/4 | 0h | - |
 | Phase 4: Full Integration | ⬜ Not Started | 0/4 | 0h | - |
