@@ -55,11 +55,8 @@ class ModelManager:
                     device=device,
                     language=language,
                     use_cpp=use_cpp,
-                    whisper_cpp_path=whisper_cpp_path
+                    config=self.config
                 )
-                
-                # Set the specific model file
-                engine.set_model_file(ggml_model_path)
                 
                 return engine
             
@@ -111,11 +108,8 @@ class ModelManager:
                 device=device,
                 language=language,
                 use_cpp=use_cpp,
-                whisper_cpp_path=whisper_cpp_path
+                config=self.config
             )
-            
-            # Set the specific model file
-            engine.set_model_file(selected_model)
             
             return engine
         
@@ -140,7 +134,7 @@ class ModelManager:
             device=device,
             language=language,
             use_cpp=use_cpp,
-            whisper_cpp_path=whisper_cpp_path
+            config=self.config
         )
         
         try:
@@ -282,7 +276,8 @@ class ModelManager:
             engine = TranscriptionEngine(
                 model_name=model_name,
                 device=self.config.transcription.device,
-                language=self.config.transcription.language
+                language=self.config.transcription.language,
+                config=self.config
             )
             
             self.logger.info(f"Transcription engine initialized with model: {model_name}")
@@ -318,7 +313,7 @@ class ModelManager:
             device=self.config.transcription.device,
             language=self.config.transcription.language,
             use_cpp=self.config.transcription.use_cpp,
-            whisper_cpp_path=self.config.transcription.whisper_cpp_path
+            config=self.config
         )
         
         self.logger.info(f"Transcription engine initialized with model: {model_name}")
@@ -392,11 +387,8 @@ class ModelManager:
                             device=self.config.transcription.device,
                             language=self.config.transcription.language,
                             use_cpp=True,
-                            whisper_cpp_path=self.config.transcription.whisper_cpp_path
+                            config=self.config
                         )
-                        
-                        # Set the specific model file
-                        engine.set_model_file(model_path)
                         
                         # Store the result and close the dialog
                         result_container["engine"] = engine

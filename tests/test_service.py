@@ -7,10 +7,12 @@ from voice_input_service.service import VoiceInputService
 from voice_input_service.ui.events import EventHandler
 import queue
 import threading
+from pathlib import Path
 
 # +++ Add Imports for Spec +++
 from voice_input_service.utils.text_processor import TextProcessor
 from voice_input_service.core.chunk_buffer import ChunkMetadataManager
+from voice_input_service.config import Config, AudioConfig, TranscriptionConfig, UIConfig, HotkeyConfig
 # +++++++++++++++++++++++++++++
 
 # Constants for testing
@@ -105,10 +107,42 @@ def mock_transcriber():
 
 @pytest.fixture
 def mock_config():
-    config = Mock()
-    config.audio.min_chunk_size = 1000 # Example value
-    config.transcription.min_chunk_size = 1000 # Example value
+    """Create a more complete mock Config object for service tests."""
+    config = Mock(spec=Config)
+    # Mock nested config objects with specs
+    config.audio = Mock(spec=AudioConfig)
+    config.transcription = Mock(spec=TranscriptionConfig)
+    config.ui = Mock(spec=UIConfig) # Add UI and Hotkeys if needed by service methods
+    config.hotkeys = Mock(spec=HotkeyConfig)
+    
+    # Set specific attributes needed by VoiceInputService __init__ and methods
+    # AudioConfig attributes:
     config.audio.sample_rate = 16000
+    config.audio.channels = 1
+    config.audio.chunk_size = 2048
+    config.audio.device_index = None
+    config.audio.min_audio_length_sec = 1.5 
+    config.audio.silence_duration_sec = 2.0 
+    config.audio.max_chunk_duration_sec = 15.0
+    config.audio.vad_mode = "silero" # Needed by worker init
+    config.audio.vad_threshold = 0.5 # Needed by worker init
+    
+    # TranscriptionConfig attributes:
+    config.transcription.min_chunk_size_bytes = 32000
+    config.transcription.language = "en"
+    # Add paths if testing cpp path
+    config.transcription.use_cpp = False # Assume Python Whisper by default for service tests unless specified
+    config.transcription.whisper_cpp_path = "/fake/path/whisper-cli"
+    config.transcription.ggml_model_path = "/fake/path/ggml-base.bin"
+    
+    # Top-level config attributes:
+    config.data_dir = Path("/fake/data/dir") # Use Path object
+    config.debug = False
+    config.log_level = "INFO"
+    
+    # Mock save method to prevent file operations
+    config.save = Mock()
+
     return config
 
 @pytest.fixture

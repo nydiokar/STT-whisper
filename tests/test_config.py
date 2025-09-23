@@ -31,11 +31,12 @@ def test_audio_config_defaults():
     assert config.channels == 1
     assert config.format_type == pyaudio.paInt16
     assert config.device_index is None
-    assert config.min_audio_length == 40000
+    assert config.min_audio_length_sec == 1.5
     assert config.min_process_interval == 0.5
     assert config.vad_mode == "silero"
-    assert config.vad_threshold == 0.3
-    assert config.silence_duration == 1.5
+    assert config.vad_threshold == 0.5
+    assert config.silence_duration_sec == 2.0
+    assert config.max_chunk_duration_sec == 15.0
 
 @pytest.mark.parametrize(
     "value, expected",
@@ -60,20 +61,22 @@ def test_audio_config_custom_values():
         channels=2,
         format_type=pyaudio.paFloat32,
         device_index=1,
-        min_audio_length=16000,
+        min_audio_length_sec=1.0,
         min_process_interval=1.0,
         vad_threshold=0.8,
-        silence_duration=2.0
+        silence_duration_sec=2.0,
+        max_chunk_duration_sec=5.0
     )
     assert config.sample_rate == 44100
     assert config.chunk_size == 1024
     assert config.channels == 2
     assert config.format_type == pyaudio.paFloat32
     assert config.device_index == 1
-    assert config.min_audio_length == 16000
+    assert config.min_audio_length_sec == 1.0
     assert config.min_process_interval == 1.0
     assert config.vad_threshold == 0.8
-    assert config.silence_duration == 2.0
+    assert config.silence_duration_sec == 2.0
+    assert config.max_chunk_duration_sec == 5.0
 
 # TranscriptionConfig Tests
 def test_transcription_config_defaults():
@@ -85,11 +88,10 @@ def test_transcription_config_defaults():
     assert config.language == "en"
     assert config.translate is False
     assert config.cache_dir is None
-    assert config.min_chunk_size == 40000
+    assert config.min_chunk_size_bytes == 32000
     assert config.use_cpp is True
     assert config.whisper_cpp_path is not None
     assert config.ggml_model_path is None
-    assert config.continuous_mode is False
 
 def test_transcription_config_custom_values():
     """Test TranscriptionConfig with custom values."""
@@ -99,7 +101,8 @@ def test_transcription_config_custom_values():
         compute_type="float32",
         language="fr",
         translate=True,
-        cache_dir="/tmp/cache"
+        cache_dir="/tmp/cache",
+        min_chunk_size_bytes=16000
     )
     assert config.model_name == "medium"
     assert config.device == "cuda"
@@ -107,6 +110,7 @@ def test_transcription_config_custom_values():
     assert config.language == "fr"
     assert config.translate is True
     assert config.cache_dir == "/tmp/cache"
+    assert config.min_chunk_size_bytes == 16000
 
 def test_transcription_config_invalid_model():
     """Test TranscriptionConfig with invalid model name."""

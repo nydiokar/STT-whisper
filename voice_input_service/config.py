@@ -12,17 +12,18 @@ logger = logging.getLogger("VoiceService.Config")
 class AudioConfig(BaseModel):
     """Audio recording configuration."""
     sample_rate: int = Field(16000, description="Audio sample rate in Hz")
-    chunk_size: int = Field(2048, description="Size of audio chunks to process")
+    chunk_size: int = Field(2048, description="Audio chunk size from microphone")
     channels: int = Field(1, description="Number of audio channels (1=mono, 2=stereo)")
     format_type: int = Field(pyaudio.paInt16, description="Audio format type")
     device_index: Optional[int] = Field(None, description="Input device index, None for default")
-    min_audio_length: int = Field(40000, description="Minimum audio length in samples before processing (~1.25 sec)")
+    min_audio_length_sec: float = Field(1.5, description="Minimum audio duration (seconds) to process in continuous mode")
     min_process_interval: float = Field(0.5, description="Minimum interval between processing audio chunks")
     
-    # Voice Activity Detection settings
-    vad_mode: Literal["basic", "webrtc", "silero"] = Field("silero", description="Voice activity detection mode")
-    vad_threshold: float = Field(0.3, description="Silero VAD threshold (0.0-1.0)")
-    silence_duration: float = Field(1.5, description="Wait for silence before processing (seconds)")
+    # Voice Activity Detection settings (used by worker in continuous mode)
+    vad_mode: Literal["silero"] = Field("silero", description="Voice activity detection mode (only silero supported currently)")
+    vad_threshold: float = Field(0.5, description="Silero VAD threshold (0.0-1.0, higher = less sensitive)")
+    silence_duration_sec: float = Field(2.0, description="Duration of silence (seconds) after speech to trigger processing in continuous mode")
+    max_chunk_duration_sec: float = Field(15.0, description="Maximum duration (seconds) of a single audio chunk before forcing processing in continuous mode")
     
     @field_validator('sample_rate')
     @classmethod
@@ -49,28 +50,26 @@ class AudioConfig(BaseModel):
 class TranscriptionConfig(BaseModel):
     """Transcription configuration."""
     model_name: str = Field("base", description="Whisper model name (tiny, base, small, medium, large)")
-    device: Optional[str] = Field(None, description="Device to run model on (cpu, cuda)")
+    device: Optional[str] = Field(None, description="Device to run model on (auto, cpu, cuda, mps)")
     compute_type: str = Field("float32", description="Computation type (float16, float32, int8)")
-    language: Optional[str] = Field("en", description="Language code for transcription")
+    language: Optional[str] = Field("en", description="Language code for transcription (None for auto-detect)")
     translate: bool = Field(False, description="Whether to translate to English")
-    cache_dir: Optional[str] = Field(None, description="Directory to cache models")
-    min_chunk_size: int = Field(40000, description="Minimum audio chunk size to process (in bytes)")
+    cache_dir: Optional[str] = Field(None, description="Directory to cache models (for Python Whisper)")
+    min_chunk_size_bytes: int = Field(32000, description="Minimum audio chunk size in bytes (~1 sec @ 16kHz) to send for transcription")
     
     # whisper.cpp specific options
     use_cpp: bool = Field(True, description="Whether to use whisper.cpp instead of Python Whisper")
     whisper_cpp_path: str = Field("C:\\Users\\Cicada38\\Projects\\whisper.cpp\\build\\bin\\Release\\whisper-cli.exe", description="Path to the whisper.cpp executable")
-    ggml_model_path: Optional[str] = Field(None, description="Path to specific GGML model file")
-    
-    # Continuous mode setting
-    continuous_mode: bool = Field(False, description="Whether to use continuous transcription mode")
+    ggml_model_path: Optional[str] = Field(None, description="Path to specific GGML model file (if not specified, attempts auto-find)")
     
     @field_validator('model_name')
     @classmethod
     def validate_model_name(cls, v: str) -> str:
         valid_models = ["tiny", "base", "small", "medium", "large"]
-        if v.lower() not in valid_models:
-            raise ValueError(f"Model name must be one of {valid_models}, got {v}")
-        return v.lower()
+        base_model = v.split('.')[0]
+        if base_model not in valid_models:
+            raise ValueError(f"Model name must be one of {valid_models} (or .en variant), got {v}")
+        return v
     
     @field_validator('compute_type')
     @classmethod

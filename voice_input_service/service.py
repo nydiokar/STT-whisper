@@ -1,31 +1,30 @@
 from __future__ import annotations
 import threading
 import time
-from typing import Optional, Tuple
+from typing import Optional, Dict, Any, List, Literal, Tuple
 import logging
-import numpy as np
 import tkinter as tk
 from tkinter import messagebox
-import uuid # Import uuid for generating IDs
 from datetime import datetime # Import datetime for formatting
-import json # Import json for saving metadata
 import os # Import os for path manipulation
-import queue # Import queue for thread-safe communication
+from pathlib import Path # Added Path
 
 # Import core components
 from voice_input_service.core.audio import AudioRecorder
-from voice_input_service.core.transcription import TranscriptionEngine, ModelError
-from voice_input_service.core.processing import TranscriptionWorker
-from voice_input_service.utils.file_ops import TranscriptManager
+from voice_input_service.core.transcription import TranscriptionEngine, ModelError, TranscriptionResult
+from voice_input_service.core.processing import TranscriptionWorker # Restored worker
+from voice_input_service.utils.file_ops import TranscriptManager # Use updated manager
 from voice_input_service.ui.events import KeyboardEventManager, EventHandler
 from voice_input_service.config import Config
 from voice_input_service.utils.clipboard import copy_to_clipboard
 from voice_input_service.utils.lifecycle import Component, Closeable
 from voice_input_service.utils.text_processor import TextProcessor
-from voice_input_service.core.chunk_buffer import ChunkMetadataManager
+
+# Type alias for mode
+OperatingMode = Literal["session", "continuous"]
 
 class VoiceInputService(EventHandler, Closeable):
-    """Main service for voice transcription."""
+    """Main service for voice transcription with session and continuous modes."""
     
     def __init__(
         self, 
@@ -55,39 +54,51 @@ class VoiceInputService(EventHandler, Closeable):
             channels=self.config.audio.channels,
             chunk_size=self.config.audio.chunk_size,
             device_index=self.config.audio.device_index,
-            on_data_callback=self._on_audio_data
+            on_data_callback=None # Set dynamically
         )
         
         # Initialize utility classes - each with a clear responsibility
-        self.transcript_manager = TranscriptManager()
+        self.transcript_manager = TranscriptManager(base_dir=self.config.data_dir / "data")
         self.text_processor = TextProcessor(min_words=2)
-        self.metadata_manager = ChunkMetadataManager()
         
         # State variables
+        self.current_mode: OperatingMode = "session" # Default mode
         self.recording = False
-        # Read initial continuous mode state from config
-        self.continuous_mode = config.transcription.continuous_mode 
+        self.session_start_time: Optional[float] = None
         self.model_error_reported = False
+        self.accumulated_audio_data = bytearray() # For session mode
+        # Store for intermediate results in continuous mode (replace ChunkMetadataManager)
+        self.continuous_segments: List[Dict[str, Any]] = [] 
+        self.last_continuous_text = "" # Track last successful continuous text for UI
         
         # Thread synchronization
         self.state_lock = threading.RLock()
-        self.stop_timer = None
-        
-        # --- Queue for thread-safe UI updates from worker --- 
-        self.ui_queue = queue.Queue()
-        # --- End Queue --- 
         
         # Test the transcription model before starting
         self._verify_transcription_model()
+        
+        # --- Initialize Worker ---
+        # Worker handles VAD, buffering, and calls transcriber for intermediate results.
+        self.worker: Optional[TranscriptionWorker] = None
+        try:
+             # Initialize TranscriptionWorker with ONLY the required arguments
+             self.worker = TranscriptionWorker(
+                 transcriber=self.transcriber,
+                 on_result=self._on_continuous_result,
+                 config=self.config
+             )
+             self.logger.info("TranscriptionWorker initialized.")
+        except Exception as e:
+             self.logger.error(f"Failed to initialize TranscriptionWorker: {e}", exc_info=True)
+             # App can continue, but continuous mode might fail
+        # --- End Worker Init ---
         
         # Set up processing worker, passing initial mode
         self.worker = TranscriptionWorker(
             process_func=self._process_audio_chunk,
             on_result=self._on_transcription_result,
             config=self.config,
-            initial_continuous_mode=self.continuous_mode, # Pass initial state
-            completion_callback=self._on_worker_stopped, # Add this callback
-            on_final_result=self._on_final_result      # Add final result callback
+            initial_continuous_mode=self.current_mode == "continuous", # Pass initial state
         )
         
         # Set up UI events
@@ -99,19 +110,22 @@ class VoiceInputService(EventHandler, Closeable):
         
         # Set config in UI and register for settings changes
         self.ui.set_config(self.config)
-        # Pass the queue to the UI
-        self.ui.set_service_queue(self.ui_queue)
-        # Pass the finalize stop handler to the UI
-        self.ui.set_finalize_stop_handler(self._finalize_stop) 
-        self.ui.on_settings_changed = self._on_settings_changed
+        
         # --- Sync UI Checkbox with Initial Config State ---
         if hasattr(self.ui, 'continuous_var'):
-            self.ui.continuous_var.set(self.continuous_mode)
-            self.logger.debug(f"Initial UI checkbox state set to: {self.continuous_mode}")
+            # Determine initial mode from config if available, else default
+            # This depends on if config loading happens before service init
+            # Assuming config is loaded, read initial state:
+            self.current_mode = "continuous" if self.config.transcription.get('continuous_mode', False) else "session"
+            self.ui.continuous_var.set(self.current_mode == "continuous")
+            self.logger.debug(f"Initial UI checkbox state set to: {self.current_mode == 'continuous'} based on config")
+        else:
+             # Fallback if UI doesn't have the var yet
+             self.current_mode = "session"
+             self.logger.debug("UI continuous_var not found, defaulting mode to session")
         # --- End Sync ---
         
         self.logger.info(f"Initializing VoiceInputService instance, id(self): {id(self)}")
-        self.accumulated_text = ""
         
         self.logger.info("Voice Input Service ready")
     
@@ -170,27 +184,28 @@ class VoiceInputService(EventHandler, Closeable):
             # Optionally, revert the checkbox state in the UI if possible
             # self.ui.continuous_var.set(not enabled) # Revert UI state
             messagebox.showwarning("Recording Active", "Cannot change Continuous Mode while recording is in progress.")
-            self.ui.continuous_var.set(self.continuous_mode) # Set checkbox back
+            self.ui.continuous_var.set(self.current_mode == "continuous") # Set checkbox back
             return
             
         with self.state_lock:
-            if self.continuous_mode == enabled:
+            if self.current_mode == "continuous" == enabled:
                 return # No change
                 
-            self.continuous_mode = enabled
+            self.current_mode = "continuous" if enabled else "session"
             # Update keyboard manager if needed
             if hasattr(self, 'event_manager'): 
-                self.event_manager.continuous_mode = self.continuous_mode
+                self.event_manager.continuous_mode = self.current_mode == "continuous"
             
             # Update the config object
-            self.config.transcription.continuous_mode = enabled
+            self.config.transcription.continuous_mode = self.current_mode == "continuous"
+            self.config.save()
             
             # Update the worker's mode state and VAD settings
             if hasattr(self, 'worker'):
-                self.worker.set_continuous_mode(enabled) # Inform the worker
+                self.worker.set_continuous_mode(self.current_mode == "continuous") # Inform the worker
                 self.worker.update_vad_settings()
                 
-            self.logger.info(f"Continuous mode {'enabled' if self.continuous_mode else 'disabled'}")
+            self.logger.info(f"Continuous mode {'enabled' if self.current_mode == 'continuous' else 'disabled'}")
             # Consider saving config here if desired, or rely on SettingsDialog save
             # self.config.save()
     
@@ -218,13 +233,10 @@ class VoiceInputService(EventHandler, Closeable):
             self.ui.show_language_error(str(e))
     
     def _on_audio_data(self, data: bytes) -> None:
-        """Handle incoming audio data."""
-        # Using a lock isn't necessary here as we're only checking
-        # self.recording which is a boolean (atomic read in Python)
-        if self.recording:
-            # Add data to processing worker
+        """Handle incoming audio data by passing it to the worker."""
+        if self.recording and self.worker:
             self.worker.add_audio(data)
-    
+
     def _process_audio_chunk(self, audio_data: bytes) -> Optional[Tuple[str, float]]:
         """Process an audio chunk and return transcription result and duration."""
         min_chunk_size = self.config.transcription.min_chunk_size
@@ -282,112 +294,269 @@ class VoiceInputService(EventHandler, Closeable):
             return None
     
     def start_recording(self) -> bool:
-        """Start audio recording."""
+        """Start recording based on the current mode."""
+        if self.recording:
+            self.logger.warning("Already recording.")
+            return False
+        if self.model_error_reported:
+             self.logger.error("Cannot start recording due to model error.")
+             self.ui.update_status_text("Fix model error in settings first!")
+             return False
+
         with self.state_lock:
-            if self.recording:
-                self.logger.warning("Already recording")
-                return False
+            self.recording = True
+            self.session_start_time = time.time()
+            self.accumulated_audio_data.clear() # Clear session buffer
+            self.continuous_segments.clear() # Clear continuous results
+            self.last_continuous_text = "" # Clear UI text tracker
             
-            # Don't start if there's a known model error
-            if self.model_error_reported:
-                self.logger.warning("Cannot start recording due to model error")
-                self.ui.update_status_text("Cannot start recording - model error")
+            # Worker always receives audio, its internal logic handles mode differences
+            if self.worker and self.worker.start():
+                 self.recorder.on_data_callback = self.worker.add_audio
+                 self.logger.info(f"Starting recording (Mode: {self.current_mode}). Worker started.")
+            else:
+                 self.logger.error("Failed to start TranscriptionWorker.")
+                 self.recording = False
+                 self.session_start_time = None
+                 self.ui.update_status_text("Error: Worker failed")
+                 return False
+
+            # Start the actual audio recorder
+            if not self.recorder.start():
+                self.logger.error("Audio recorder failed to start.")
+                if self.worker:
+                    self.worker.stop() # Stop worker if recorder failed
+                self.recording = False
+                self.session_start_time = None
+                self.ui.update_status_text("Error: Audio input failed")
                 return False
                 
-            self.logger.info("Starting recording")
-            
-            # --- Always clear previous text for a clean start --- 
-            self.logger.debug("Clearing previous accumulated text for new recording session.")
-            self.accumulated_text = ""
-            # Also clear the UI display immediately
-            self.ui.update_text("") 
-            self.ui.update_word_count(0)
-            # ---------------------------------------------------
-
-            # Cancel any pending stop timer
-            if self.stop_timer:
-                self.stop_timer.cancel()
-                self.stop_timer = None
-            
-            # Reset state
-            self.recording = True
-            self.recording_start_time = time.time()
-            
-            # Update UI status
-            self.ui.update_status(True)
-            self.ui.update_status_color("recording")
-            
-            # Start worker if not running
-            if not self.worker.running:
-                self.worker.start()
-            
-            # Start audio recorder
-            if not self.recorder.start():
-                self.logger.error("Failed to start audio recorder")
-                self.recording = False
-                self.ui.update_status(False)
-                self.ui.update_status_color("error")
-                return False
+            # Update UI
+            self.ui.update_status(True) # Show recording active
+            self.ui.update_text("") # Clear text area
+            self.ui.update_status_text(f"Recording ({self.current_mode})...") 
             
             return True
-    
-    def stop_recording(self, cancel_timer: bool = True) -> None:
-        """Initiates the recording stop sequence asynchronously."""
-        # Returns None immediately, final actions happen in _finalize_stop
+
+    def stop_recording(self) -> None:
+        """Stop recording and start background thread for final processing."""
+        if not self.recording:
+            self.logger.debug("Stop recording called but not recording.")
+            return
+
         with self.state_lock:
-            if not self.recording:
-                self.logger.debug("Stop recording called but not recording.")
-                return
+            self.logger.info(f"Stopping recording (Mode: {self.current_mode}). Starting final processing...")
+            self.recording = False # Prevent more callbacks
             
-            self.logger.info(f"Initiating stop sequence... Instance: {id(self)}")
+            # Stop the audio source - THIS NOW BLOCKS UNTIL RECORDER THREAD IS DONE
+            # It returns the full audio buffer captured during the session.
+            full_audio_data = self.recorder.stop() 
+            if not full_audio_data:
+                 self.logger.warning("No audio data captured by recorder, skipping final processing.")
+                 # Update UI directly since there's nothing to process
+                 self.ui.update_status(False) 
+                 self.ui.update_status_text("Ready (No audio captured)")
+                 self.ui.update_status_color("ready") # Explicitly set ready color
+                 return
             
-            # Cancel any pending stop timer (e.g., from natural pause)
-            if cancel_timer and self.stop_timer:
-                self.stop_timer.cancel()
-                self.stop_timer = None
-            
-            # Set recording flag to prevent further processing via _on_audio_data
-            self.recording = False
-            # --- Stop animation IMMEDIATELY --- 
-            self.ui._stop_recording_animation()
-            # ---------------------------------- 
-            
-            # Stop the audio recorder immediately
-            audio_data = self.recorder.stop()
-            
-            # Update UI to show processing is happening
-            self.ui.update_status(False) # Argument might not be needed if update_status_color is used
-            # self.ui._stop_recording_animation() # Moved earlier
-            self.ui.update_status_color("processing")
-            self.logger.debug("UI set to processing state.")
+            # Signal worker to stop processing its queue and finish
+            if self.worker:
+                self.worker.stop() 
+                 
+            # --- UI Update: Processing --- Immediately update UI
+            self.ui.update_status(False) 
+            self.ui.update_status_text("Processing...")
+            # --- End UI Update ---
 
-            # --- Non-Continuous Mode Final Chunk Handled by Worker --- 
-            # The final chunk for non-continuous mode is sent to the worker 
-            # via signal_stop below and processed asynchronously.
+            # --- Start Background Thread for Final Transcription/Saving --- 
+            mode_at_stop = self.current_mode # Capture mode state
+            processing_thread = threading.Thread(
+                target=self._finalize_session_processing,
+                args=(full_audio_data, mode_at_stop),
+                daemon=True # Allow app to exit even if this thread hangs
+            )
+            processing_thread.start()
+            self.logger.debug(f"Started background thread for final processing (Mode: {mode_at_stop}).")
+            # --- End Background Thread --- 
 
-            # --- Signal Stop via Queue --- 
-            # Send None to the queue to signal graceful shutdown
-            # In non-continuous mode, send the final audio data for processing.
-            if not self.continuous_mode:
-                stop_signal_data = audio_data if len(audio_data) > self.config.transcription.min_chunk_size else b''
-                self.logger.info(f"Sending final non-continuous chunk ({len(stop_signal_data)} bytes) and stop signal to worker.")
-                self.worker.signal_stop(final_chunk=stop_signal_data)
+        # Return immediately, freeing the UI thread
+        self.logger.debug("stop_recording method finished, final processing running in background.")
+
+    # --- NEW: Method runs in background thread --- 
+    def _finalize_session_processing(self, full_audio_data: bytes, mode: OperatingMode) -> None:
+        """Performs final transcription/segment processing and saving in a background thread."""
+        self.logger.info(f"Background thread: Starting final processing for mode '{mode}'. Audio size: {len(full_audio_data)} bytes")
+        saved_paths: Optional[Dict] = None
+        final_text: str = ""
+        error_message: Optional[str] = None
+        
+        try:
+            if not self.session_start_time:
+                 raise ValueError("Session start time not set.")
+                 
+            session_dt = datetime.fromtimestamp(self.session_start_time)
+            base_path = self.transcript_manager._get_session_base_path(session_dt)
+            target_wav_path = str(base_path.with_suffix(".wav"))
+            
+            # --- Prepare Session Data --- 
+            session_end_time = time.time()
+            session_duration = session_end_time - self.session_start_time
+            
+            session_data = {
+                "session_id": base_path.name,
+                "date": session_dt.strftime("%Y-%m-%d"),
+                "start_time_str": session_dt.strftime("%H:%M:%S"),
+                "start_timestamp_unix": self.session_start_time,
+                "end_timestamp_unix": session_end_time,
+                "total_duration_sec": round(session_duration, 2),
+                "mode": mode,
+                "language": self.config.transcription.language, # Start with config language
+                "model_info": self.transcriber.get_model_info(),
+                "full_text": "", # Will be populated below
+                "segments": [], # Will be populated below
+                "json_path": None, # Will be added by save_session
+                "wav_path": None,
+            }
+            # --- End Prepare Session Data --- 
+
+            if mode == "session":
+                self.logger.info("Background thread: Transcribing full audio for session mode...")
+                # Transcribe FULL audio (Engine saves WAV if path provided)
+                transcription_result: TranscriptionResult = self.transcriber.transcribe(
+                    audio=full_audio_data, 
+                    target_wav_path=target_wav_path 
+                )
+                final_text = transcription_result.get("text", "")
+                session_data["full_text"] = final_text
+                session_data["segments"] = transcription_result.get("segments", [])
+                session_data["language"] = transcription_result.get("language", session_data["language"])
+                self.logger.info("Background thread: Session mode transcription complete.")
+                
+            elif mode == "continuous":
+                self.logger.info("Background thread: Using collected segments for continuous mode saving.")
+                # Use collected segments, save the full WAV separately
+                with self.state_lock: # Access segments safely
+                     session_data["segments"] = list(self.continuous_segments) # Take a copy
+                # Reconstruct full text from segments
+                final_text = " ".join([seg.get('text', '') for seg in session_data["segments"]]).strip()
+                session_data["full_text"] = final_text
+                # Language was determined by chunks, might be less accurate than full pass
+                # Keep language from config or maybe last chunk? For now, use config.
+                
+                # Save the WAV file separately since transcribe wasn't called with path
+                try:
+                     self.transcript_manager.save_wav(target_wav_path, full_audio_data)
+                     self.logger.info(f"Background thread: Continuous mode WAV saved to {target_wav_path}")
+                except Exception as wav_e:
+                     self.logger.error(f"Background thread: Failed to save continuous mode WAV file: {wav_e}", exc_info=True)
+                     # Proceed to save JSON anyway?
+
+            # --- Save Session JSON --- 
+            saved_paths = self.transcript_manager.save_session(session_data)
+            self.logger.info("Background thread: Session data saved.")
+
+        except (ModelError, IOError, ValueError) as e:
+            self.logger.error(f"Background thread: Error during final processing: {e}", exc_info=True)
+            error_message = f"Error processing/saving: {e}"
+        except Exception as e:
+            self.logger.error(f"Background thread: Unexpected error during final processing: {e}", exc_info=True)
+            error_message = f"Unexpected Error: {e}"
+        finally:
+            # --- Schedule UI Update on Main Thread --- 
+            # final_text and saved_paths are captured from the try block
+            # If error occurred, final_text might be empty, saved_paths None
+            if error_message:
+                 # Pass error message instead of saved_paths
+                 self.ui.window.after(0, lambda: self._update_ui_post_save(final_text, None, error_message))
             else:
-                self.logger.info("Sending stop signal to worker (continuous mode).")
-                self.worker.signal_stop(final_chunk=None)
-            # --- End Signal Stop --- 
+                 self.ui.window.after(0, lambda: self._update_ui_post_save(final_text, saved_paths))
+            self.logger.debug("Background thread: Scheduled final UI update.")
+            # --- End Schedule UI Update --- 
+
+    # --- NEW: Method runs in UI thread via root.after --- 
+    def _update_ui_post_save(self, final_text: str, saved_paths: Optional[Dict], error_message: Optional[str] = None) -> None:
+        """Updates the UI after background processing is complete."""
+        self.logger.info(f"UI thread: Updating UI post-processing. Error: {error_message}")
+        with self.state_lock:
+             # Check if final text differs from incrementally built text
+             # Strip both for comparison to avoid issues with trailing spaces
+             if final_text.strip() != self.last_continuous_text.strip():
+                 self.logger.debug("Final text differs from incremental, updating UI text.")
+                 self.ui.update_text(final_text)
+             else:
+                 self.logger.debug("Final text matches incremental, skipping redundant UI text update.")
+             # Always update the tracker to the definitive final text
+             self.last_continuous_text = final_text
+             self.ui.update_word_count(len(final_text.split()))
+
+             # Update status message
+             if error_message:
+                 self.ui.update_status_text(error_message)
+                 self.ui.update_status_color("error")
+             elif saved_paths:
+                 json_basename = os.path.basename(saved_paths.get('json', 'N/A'))
+                 self.ui.update_status_text(f"Saved: {json_basename}")
+                 self.ui.update_status_color("ready")
+                 # Optionally handle clipboard copy after successful save
+                 # self._handle_clipboard_copy()
+             else:
+                 self.ui.update_status_text("Error saving session files!")
+                 self.ui.update_status_color("error")
+             
+             # Reset session start time (safe to do here after all processing)
+             self.session_start_time = None
+             # start_recording handles clearing buffers/segments for the *next* session.
+
+    def _on_continuous_result(self, result: TranscriptionResult) -> None:
+        """Handle INTERMEDIATE transcription result from the worker in Continuous Mode."""
+        with self.state_lock:
+            if not self.recording or self.current_mode != "continuous":
+                self.logger.debug("Ignoring continuous result (not recording or not continuous mode).")
+                return
+        
+        new_text_chunk = result.get("text", "").strip()
+        if not new_text_chunk or new_text_chunk == ".":
+            return # Ignore empty or noise results
             
-            # --- IMPORTANT: Remove old worker.stop() call --- 
-            # self.worker.stop() # Replaced by signal_stop via queue
+        self.logger.debug(f"Received continuous transcription chunk: '{new_text_chunk[:50]}...'" )
+        
+        # --- Store Processed Segments --- 
+        if not self.session_start_time:
+             self.logger.error("Cannot process segments, session_start_time is not set.")
+             return
+             
+        processed_segments = []
+        for segment in result.get("segments", []):
+             try:
+                 abs_start_time = self.session_start_time + float(segment['start'])
+                 abs_end_time = self.session_start_time + float(segment['end'])
+                 processed_segments.append({
+                     "text": segment.get('text', '').strip(),
+                     "start_time_unix": abs_start_time,
+                     "end_time_unix": abs_end_time,
+                     "start_str": datetime.fromtimestamp(abs_start_time).strftime("%H:%M:%S.%f")[:-3],
+                     "end_str": datetime.fromtimestamp(abs_end_time).strftime("%H:%M:%S.%f")[:-3],
+                 })
+             except (KeyError, ValueError, TypeError) as e:
+                 self.logger.warning(f"Skipping segment due to missing/invalid data: {segment}. Error: {e}")
+                 
+        with self.state_lock:
+            self.continuous_segments.extend(processed_segments)
+            self.logger.debug(f"Added {len(processed_segments)} segments to continuous_segments list.")
+        # --- End Store Segments --- 
+
+        # --- Update UI Incrementally --- 
+        with self.state_lock: 
+            # Use text processor to handle appending and capitalization
+            new_full_text = self.text_processor.append_text(self.last_continuous_text, new_text_chunk)
+            self.last_continuous_text = new_full_text
             
-            # --- IMPORTANT: Remove final UI updates and return ---
-            # The rest of the logic (final UI update, setting status to ready)
-            # now happens in _finalize_stop, triggered by the worker callback.
-            # We return control to the UI thread immediately.
+            # Update UI
+            self.ui.update_text(self.last_continuous_text) 
+            self.ui.update_word_count(len(self.last_continuous_text.split()))
             
-        # self.logger.info("Recording stop initiated.") # Logging moved to _finalize_stop
-        # Return immediately, do not return text here
-    
+        # --- VAD/Silence checks are handled by the Worker --- 
+
     def _on_transcription_result(self, text: str, duration: float) -> None:
         """Handle transcription result FROM THE WORKER during continuous mode."""
         # --- Check if stopping --- 
@@ -401,7 +570,7 @@ class VoiceInputService(EventHandler, Closeable):
 
         # If not in continuous mode, this callback should ideally not be triggered by the worker,
         # but we add a check just in case.
-        if not self.continuous_mode:
+        if self.current_mode != "continuous":
             self.logger.debug(f"Ignoring intermediate transcription result in non-continuous mode: {text}")
             return
             
@@ -418,154 +587,69 @@ class VoiceInputService(EventHandler, Closeable):
         text = self.text_processor.filter_hallucinations(text)
         if not text: return
 
-        # --- Store Metadata (Placeholder Implementation) ---
-        current_time = time.time()
-        segment_id = f"seg_{uuid.uuid4().hex[:8]}" # Generate unique ID for this segment
-        dt_object = datetime.fromtimestamp(current_time)
-        timestamp_str = dt_object.strftime("%H:%M:%S.%f")[:-3] # Add milliseconds
-        date_str = dt_object.strftime("%Y-%m-%d")
-        # placeholder_duration = 0.0 # Duration is unknown here -- REMOVED
-
-        # Store using the metadata manager, now with actual duration
-        self.metadata_manager.add_transcription(
-            chunk_id=segment_id,
-            text=text,
-            timestamp=timestamp_str,
-            duration=duration, # Use received duration
-            date=date_str
-        )
-        self.logger.debug(f"Stored metadata for segment {segment_id} (Duration: {duration:.2f}s)")
+        # --- Store Metadata (Simplified for now) ---
+        # We are temporarily saving the *full* session at the end, 
+        # so detailed chunk metadata isn't strictly needed for the final JSON yet.
+        # But we need to update the UI. Let's just append the text for now.
+        # TODO: Store segments properly when continuous mode saving is implemented.
+        # segment_metadata = { "text": cleaned_chunk, "timestamp": time.time() }
+        # self.continuous_segments.append(segment_metadata)
         # --- End Metadata Storage ---
 
-        # --- Update UI Incrementally (Continuous Mode) --- 
-        # Append the new text chunk to the UI display
-        # NOTE: This requires the UI method to handle appending or be called appropriately.
-        # Assuming ui.update_text replaces content for now.
-        # A potential improvement: ui.append_text(text)
-        with self.state_lock: # Lock needed if we read accumulated_text
-            # Build the text to display (potentially including previous chunks for this session)
-            # For simplicity, let's keep track of UI text separately or just append
-            # Let's try just appending the new fragment for now
-            # We need a way to get current text from UI or store it
-            # current_ui_text = self.ui.get_text() # Hypothetical UI method
-            # self.ui.update_text(current_ui_text + " " + text)
+        # --- Update UI Incrementally --- 
+        with self.state_lock: 
+            # Append new chunk to the last known text for UI update
+            # Use text processor to handle potential overlaps or spacing
+            new_full_text = self.text_processor.append_text(self.last_continuous_text, text)
+            self.last_continuous_text = new_full_text
             
-            # Alternative: Update accumulated text HERE for continuous mode only?
-            # This makes stop_recording simpler for continuous.
-            if self.accumulated_text:
-                 self.accumulated_text = self.text_processor.append_text(self.accumulated_text, text)
-            else:
-                 self.accumulated_text = text
-            self.ui.update_text(self.accumulated_text) # Update UI with growing text
-            self.ui.update_word_count(len(self.accumulated_text.split()))
-        # -----------------------------------------------
+            # Update UI via queue or direct call if safe
+            # For simplicity, assuming direct UI update might be okay for text
+            self.ui.update_text(self.last_continuous_text) 
+            self.ui.update_word_count(len(self.last_continuous_text.split()))
+            
+        # --- Check for auto-stop (natural pause) ---
+        # Use worker's check for recent audio
+        if self.worker and not self.worker.has_recent_audio():
+             self.logger.info("Natural pause detected in continuous mode, stopping recording.")
+             # Need to run stop_recording on the main thread if it accesses UI directly
+             # Or make stop_recording fully thread-safe / use queue for UI parts
+             # For now, assuming stop_recording can be called (but beware UI access)
+             self.stop_recording() 
+             # TODO: Ensure thread safety if calling stop_recording from here
         
-        # Check pause detection ONLY if continuous mode (already checked above, but safe)
-        if self.continuous_mode:
-            self.logger.debug("Checking for natural pause in continuous mode (intermediate chunk)...")
-            if not self.worker.has_recent_audio():
-                self.logger.debug("Natural pause detected, scheduling delayed stop...")
-                self._delayed_stop() 
-            else:
-                # Cancel timer if speech resumes quickly
-                with self.state_lock:
-                    if self.stop_timer:
-                        self.stop_timer.cancel()
-                        self.stop_timer = None
-
-    def _delayed_stop(self) -> None:
-        """Handle delayed stop logic in a thread-safe way."""
-        with self.state_lock:
-            # Clear the timer reference
-            self.stop_timer = None
-            
-            # Only stop if we're still recording and no recent audio
-            if self.recording and not self.worker.has_recent_audio():
-                self.logger.debug("No further speech detected, stopping recording")
-                # Call stop_recording with cancel_timer=False since we're already in the timer callback
-                result = self.stop_recording(cancel_timer=False)
-                
-                # Copy to clipboard in non-continuous mode
-                if result:
-                    self._handle_clipboard_copy()
-    
     def _handle_clipboard_copy(self) -> None:
         """Handle copying text to clipboard and updating UI."""
-        with self.state_lock:
-            text_to_copy = self.accumulated_text
-            
-        if not text_to_copy:
-            self.logger.warning("No transcript to copy to clipboard")
-            self.ui.update_status_text("No text to copy")
-            return
-            
-        # Use clipboard utility directly
-        if copy_to_clipboard(text_to_copy):
-            self.ui.update_status_text("Copied to clipboard")
-    
-    # EventHandler interface methods - these handle events from the UI
-    def save_transcript(self) -> None:
-        """Handle save transcript request from UI."""
-        with self.state_lock:
-            text_to_save = self.accumulated_text
-            
-        if not text_to_save:
-            self.logger.warning("No transcript to save")
-            self.ui.update_status_text("No transcript to save")
-            return
-            
-        # Delegate to transcript manager
-        file_path = self.transcript_manager.save_transcript(text_to_save)
-        
-        # --- Save Metadata to JSON ---
-        metadata_saved = False
-        if file_path: # Proceed only if text save was successful
-            all_metadata = self.metadata_manager.get_all_metadata()
-            if all_metadata:
-                # Create a corresponding JSON filename
-                base_name = os.path.splitext(os.path.basename(file_path))[0]
-                dir_name = os.path.dirname(file_path)
-                json_filename = f"{base_name}_metadata.json"
-                json_filepath = os.path.join(dir_name, json_filename)
-                
-                try:
-                    with open(json_filepath, 'w', encoding='utf-8') as f:
-                        # Dump metadata values (list of dicts) sorted by timestamp maybe?
-                        # For now, dump the raw dictionary {segment_id: metadata_dict}
-                        json.dump(all_metadata, f, indent=2, ensure_ascii=False)
-                    self.logger.info(f"Metadata saved to: {json_filepath}")
-                    metadata_saved = True
-                except Exception as e:
-                    self.logger.error(f"Failed to save metadata JSON to {json_filepath}: {e}")
+        text_to_copy = self.last_continuous_text # Use the final displayed text
+        if text_to_copy:
+            if copy_to_clipboard(text_to_copy):
+                self.logger.info("Transcript copied to clipboard")
+                self.ui.update_status_text("Copied to clipboard!")
             else:
-                self.logger.info("No metadata to save.")
-        # --- End Metadata JSON Save ---
-
-        # Update UI based on result
-        if file_path:
-            save_message = f"Saved to: {os.path.basename(file_path)}"
-            if metadata_saved:
-                save_message += f" (+ metadata JSON)"
-            self.logger.info(f"Transcript saved to: {file_path}")
-            self.ui.update_status_text(save_message)
+                self.logger.warning("Failed to copy transcript to clipboard")
+                self.ui.update_status_text("Copy to clipboard failed")
         else:
-            self.logger.error("Failed to save transcript")
-            self.ui.update_status_text("Error saving transcript")
-    
+             self.logger.info("No text to copy to clipboard")
+
+    def save_transcript(self) -> None: # TODO: Maybe remove this? Automatic saving is primary.
+        """Explicitly save the current transcript (if applicable)."""
+        # This might be redundant now, as saving happens on stop.
+        messagebox.showinfo("Save", "Transcript is automatically saved when recording stops.")
+
     def clear_transcript(self) -> None:
         """Handle clear transcript request from UI."""
         with self.state_lock:
-            self.accumulated_text = ""
+            self.last_continuous_text = "" # Clear displayed text tracker
+            # We don't clear saved files, just the UI state
             
         # Update UI to reflect cleared state
         self.ui.update_text("")
         self.ui.update_word_count(0)
-        self.logger.info("Transcript cleared")
+        self.logger.info("Transcript cleared from UI")
     
     def run(self) -> None:
-        """Run the service."""
+        """Run the service UI main loop."""
         self.logger.info("Starting main application loop")
-        
         try:
             # Start UI main loop
             self.ui.run()
@@ -576,192 +660,86 @@ class VoiceInputService(EventHandler, Closeable):
     
     def _cleanup(self) -> None:
         """Clean up all resources properly."""
-        try:
-            # Cancel any pending timers
+        self.logger.info("Cleaning up Voice Input Service resources...")
+        # Check if state_lock was initialized before using it
+        if hasattr(self, 'state_lock'):
             with self.state_lock:
-                if self.stop_timer:
-                    self.stop_timer.cancel()
-                    self.stop_timer = None
-            
-            # Stop recording if active
-            if self.recording:
-                self.stop_recording()
-            
-            # Close components in reverse order of dependency
-            components = []
-            
-            if hasattr(self, 'worker'):
-                components.append(('worker', self.worker))
-            
-            if hasattr(self, 'recorder'):
-                components.append(('recorder', self.recorder))
-                
-            if hasattr(self, 'event_manager'):
-                components.append(('event_manager', self.event_manager))
-            
-            # Close each component properly
-            for name, component in components:
-                try:
-                    if hasattr(component, 'close'):
-                        component.close()
-                    elif hasattr(component, 'stop'):
-                        component.stop()
-                    
-                    self.logger.debug(f"Closed component: {name}")
-                except Exception as e:
-                    self.logger.error(f"Error closing {name}: {e}")
-            
-            self.logger.info("All resources cleaned up")
-        except Exception as e:
-            self.logger.error(f"Error during cleanup: {e}")
-    
+                if self.recording:
+                     self.stop_recording() # Ensure recording is stopped cleanly
+ 
+                if self.worker:
+                     self.worker.close()
+                     
+                # --- Recorder cleanup handled by stop_recording / __del__ --- 
+                # if hasattr(self, 'recorder') and self.recorder:
+                #     self.recorder.close() # REMOVED - No close method
+                 
+                # Close other components if they implement Closeable
+                if isinstance(self.transcriber, Closeable):
+                     self.transcriber.close()
+                     
+                if self.event_manager:
+                     if hasattr(self.event_manager, 'close'):
+                         self.event_manager.close()
+                     elif hasattr(self.event_manager, 'stop_listening'):
+                         self.event_manager.stop_listening()
+        else:
+            # Log if lock is missing, indicating partial initialization
+            if hasattr(self, 'logger'): # Check if logger exists too
+                self.logger.warning("Cleanup called on partially initialized service (state_lock missing).")
+            # Attempt cleanup of other resources even if lock is missing
+            try:
+                if hasattr(self, 'worker') and self.worker:
+                    self.worker.close()
+                # --- Recorder cleanup handled by stop_recording / __del__ --- 
+                # if hasattr(self, 'recorder') and self.recorder:
+                #    self.recorder.close() # REMOVED - No close method
+                if hasattr(self, 'transcriber') and isinstance(self.transcriber, Closeable):
+                    self.transcriber.close()
+                if hasattr(self, 'event_manager') and self.event_manager:
+                     if hasattr(self.event_manager, 'close'):
+                         self.event_manager.close()
+                     elif hasattr(self.event_manager, 'stop_listening'):
+                         self.event_manager.stop_listening()
+            except Exception as e:
+                # Log potential errors during this best-effort cleanup
+                if hasattr(self, 'logger'):
+                    self.logger.error(f"Error during fallback cleanup: {e}", exc_info=False)
+
+        # --- Logger might not exist if init failed early --- 
+        # self.logger.info("Cleanup complete.")
+        # Log only if logger was initialized
+        if hasattr(self, 'logger'):
+            self.logger.info("Cleanup attempt finished.")
+
     def close(self) -> None:
         """Public method to clean up resources."""
         self._cleanup()
-    
+        
     def __del__(self) -> None:
-        """Clean up service resources."""
-        self.logger.info("Shutting down Voice Input Service")
-        self.close()
+        """Ensure cleanup on object deletion."""
+        # Note: Relying on __del__ can be problematic. Explicit close() is preferred.
+        self._cleanup()
 
     def _on_settings_changed(self) -> None:
-        """Handle changes to settings."""
+        """Handle changes to application settings."""
         self.logger.info("Settings updated - applying changes")
         
-        # Check if we need to reinitialize the transcription engine
-        use_cpp = self.config.transcription.use_cpp
-        whisper_cpp_path = self.config.transcription.whisper_cpp_path
-        ggml_model_path = self.config.transcription.ggml_model_path
+        # Check if we need to reinitialize the transcription engine (major changes)
+        # Simplified check: Assume engine needs re-init for now on any setting change
+        # TODO: Implement more granular checks (model change, cpp path change etc.)
+        needs_engine_restart = True 
         
-        # If engine type changed or whisper.cpp path changed while using cpp
-        current_is_cpp = getattr(self.transcriber, "use_cpp", False)
-        
-        # Flag for engine-related changes that need restart
-        needs_restart = False
-        change_type = ""
-        
-        if current_is_cpp != use_cpp:
-            change_type = "engine type"
-            needs_restart = True
-        elif use_cpp and self.transcriber.whisper_cpp_path != whisper_cpp_path:
-            change_type = "whisper.cpp path"
-            needs_restart = True
-        elif use_cpp and hasattr(self.transcriber, 'model_file_path') and self.transcriber.model_file_path != ggml_model_path:
-            change_type = "GGML model"
-            needs_restart = True
+        if needs_engine_restart:
+             self.logger.warning("Settings change requires transcription engine restart. (Not fully implemented)")
+             # Ideally, we'd re-initialize self.transcriber here
+             # Re-verify model after re-init
+             # self.transcriber = TranscriptionEngine(...) 
+             # self._verify_transcription_model()
+             self.ui.update_status_text("Settings changed (Restart app?)") # Placeholder message
         else:
-            # For VAD and other settings that don't need full restart
-            change_type = "settings"
-            
-            # Reset model error flag and verify the model with new settings
-            self.model_error_reported = False
-            model_verified = self._verify_transcription_model()
-            
-            # Update worker with new settings even if model verification failed
-            # This ensures we at least try to apply non-critical changes
-            worker_was_running = self.worker.running
-            if worker_was_running:
-                self.worker.stop()
-            
-            # Update worker with new settings from config
-            self.worker.update_vad_settings()
-            
-            # Restart worker if it was running and model is verified
-            if worker_was_running and model_verified:
-                self.worker.start()
-                
-            self.logger.info(f"Updated configuration settings")
-            
-        if needs_restart:
-            # Show restart needed message in UI
-            restart_message = f"{change_type.capitalize()} changed - application restart required for changes to take effect"
-            self.logger.info(restart_message)
-            
-            # Notify UI of restart requirement
-            self.ui.show_restart_required(change_type)
-            
-            return
-            
-        # Handle minor settings changes that don't require restart
-        self.logger.info(f"Applied {change_type} changes without restart")
-        
-        if not self.model_error_reported:
-            self.ui.update_status_text(f"{change_type.capitalize()} updated")
-
-    # --- Asynchronous Stop Handling ---
-    def _on_worker_stopped(self) -> None:
-        """Callback executed by the worker thread when it has fully stopped.
-        
-        This method is called from the worker thread, so it must not directly
-        interact with UI elements. It signals the UI thread via a queue.
-        """
-        self.logger.debug("Worker completion callback triggered. Signaling UI via queue.")
-        # Send signal to UI thread via thread-safe queue
-        try:
-            self.ui_queue.put("WORKER_STOPPED")
-        except Exception as e:
-            # Log error if putting into queue fails (highly unlikely)
-            self.logger.error(f"Failed to put WORKER_STOPPED signal in UI queue: {e}")
-
-    def _finalize_stop(self) -> None:
-        """Final steps after recording and worker have stopped.
-        
-        This method is scheduled to run on the main UI thread after the worker
-        signals completion. It handles the final UI updates.
-        """
-        self.logger.info("Finalizing stop sequence (UI thread)...")
-        with self.state_lock:
-            # Logic moved from the end of the original stop_recording
-            # Determine final text based on mode (already decided in stop_recording)
-            final_text = self.accumulated_text
-
-            # --- Update UI with the FINAL complete text ---
-            self.logger.debug(f"Updating UI with final text: '{final_text}'")
-            self.ui.update_text(final_text)
-            self.ui.update_word_count(len(final_text.split()))
-
-            # Update UI to ready state
-            self.ui.update_status_color("ready")
-            self.logger.info("Recording stopped successfully.")
-
-            # Optionally trigger clipboard copy or other post-stop actions
-            # if final_text:
-            #     self._handle_clipboard_copy()
-
-    def _on_final_result(self, text: str, duration: float) -> None:
-        """Callback executed by the worker with the final non-continuous result.
-        
-        Cleans the received text and stores it. Also adds metadata for this final chunk.
-        """
-        self.logger.debug(f"Received final non-continuous result: '{text}'")
-
-        # --- Clean the final text using TextProcessor methods --- 
-        cleaned_text = text.strip()
-        if cleaned_text:
-            cleaned_text = self.text_processor.remove_timestamps(cleaned_text)
-        if cleaned_text:
-            cleaned_text = self.text_processor.filter_hallucinations(cleaned_text)
-        # --- End Clean --- 
-
-        # --- Store Metadata for Final Chunk ---
-        if cleaned_text:
-            current_time = time.time()
-            segment_id = f"seg_final_{uuid.uuid4().hex[:8]}" # Unique ID for final segment
-            dt_object = datetime.fromtimestamp(current_time)
-            timestamp_str = dt_object.strftime("%H:%M:%S.%f")[:-3]
-            date_str = dt_object.strftime("%Y-%m-%d")
-            # placeholder_duration = 0.0 # Duration is still unknown here -- REMOVED
-
-            self.metadata_manager.add_transcription(
-                chunk_id=segment_id, 
-                text=cleaned_text, 
-                timestamp=timestamp_str, 
-                duration=duration, # Use received duration
-                date=date_str
-            )
-            self.logger.debug(f"Stored metadata for final segment {segment_id} (Duration: {duration:.2f}s)")
-        # --- End Metadata Storage ---
-
-        with self.state_lock:
-            # This text IS the complete result for non-continuous mode
-            self.accumulated_text = cleaned_text if cleaned_text else "" # Ensure it's at least empty string
+            # For minor changes like VAD threshold, update components directly
+             if self.worker:
+                  self.worker.update_settings() # Worker reads config for VAD threshold etc.
+             self.logger.info("Applied non-critical settings changes.")
+             self.ui.update_status_text("Settings updated.")

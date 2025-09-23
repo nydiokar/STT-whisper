@@ -9,6 +9,7 @@ import numpy as np
 from voice_input_service.utils.lifecycle import Component
 from voice_input_service.utils.silence_detection import SilenceDetector
 from voice_input_service.config import Config
+from voice_input_service.core.transcription import TranscriptionEngine, TranscriptionResult
 
 # Try to import VAD-related modules
 try:
@@ -42,87 +43,59 @@ class TranscriptionWorker(Component):
     
     def __init__(
         self, 
-        process_func: Callable[[bytes], Optional[Tuple[str, float]]],
-        on_result: Callable[[str, float], None],
+        transcriber: TranscriptionEngine,
+        on_result: Callable[[TranscriptionResult], None],
         config: Config,
-        initial_continuous_mode: bool = False,
-        completion_callback: Optional[Callable[[], None]] = None,
-        on_final_result: Optional[Callable[[str, float], None]] = None
     ) -> None:
         """Initialize the worker.
         
         Args:
-            process_func: Function that processes audio data and returns text (receives text, duration)
-            on_result: Callback for when text is transcribed (receives text, duration)
-            config: Application configuration
-            initial_continuous_mode: Initial continuous mode state
-            completion_callback: Callback to call when the worker stops
-            on_final_result: Callback for the result of the final non-continuous chunk (receives text, duration)
+            transcriber: The TranscriptionEngine instance.
+            on_result: Callback for when an intermediate text chunk is transcribed.
+            config: Application configuration.
         """
         self.logger = logging.getLogger("VoiceService.Worker")
-        self.process_func = process_func
+        self.transcriber = transcriber
         self.on_result = on_result
         self.config = config
-        self.continuous_mode = initial_continuous_mode
-        self.completion_callback = completion_callback
-        self.on_final_result = on_final_result
         
-        # Extract settings from config
-        self.min_audio_length = config.audio.min_audio_length
+        # Extract relevant settings from config
+        self.min_audio_length_bytes = int(config.audio.min_audio_length_sec * config.audio.sample_rate * 2) # Convert seconds to bytes
         self.sample_rate = config.audio.sample_rate
+        self.silence_duration_sec = config.audio.silence_duration_sec
+        self.max_chunk_duration_sec = config.audio.max_chunk_duration_sec
+        self.max_chunk_bytes = int(self.max_chunk_duration_sec * self.sample_rate * 2)
+        self.min_chunk_size_bytes = config.transcription.min_chunk_size_bytes # Min bytes for transcription call
         
         # State initialization
         self.running = False
         self.thread: Optional[threading.Thread] = None
-        # Queue can now hold bytes or the STOP_SIGNAL object or (STOP_SIGNAL, bytes)
-        self.audio_queue: queue.Queue[Union[bytes, object, tuple[object, bytes]]] = queue.Queue()
-        
-        # VAD configuration from config - no need to duplicate settings here
-        # They'll all come from the config object
-        
-        # Initialize the silence detector with the config
-        self.silence_detector = SilenceDetector(config=self.config)
-        
-        # Controls for better response
+        self.audio_queue: queue.Queue[bytes | object] = queue.Queue()
         self.last_audio_time = time.time()
-        self.silence_duration = config.audio.silence_duration  # Wait for silence before processing
-        self.min_process_interval = config.audio.min_process_interval  # Minimum time between processing chunks
-        self.last_process_time = 0
         
-        # Buffer controls
-        self.min_chunk_size = config.transcription.min_chunk_size  # Minimum chunk size to process
-        self.max_chunk_size = 480000  # Maximum chunk size (30 seconds at 16kHz)
+        # VAD setup
+        self.silence_detector = SilenceDetector(config=self.config)
+        if not self.silence_detector._initialized:
+            self.logger.error("Silence detector failed to initialize in Worker. VAD will not function.")
+            # Decide if this is fatal? For now, worker can run but VAD won't work.
         
         # Thread synchronization
-        self.buffer_lock = threading.RLock()  # Reentrant lock for buffer access
+        self.buffer_lock = threading.RLock() # Lock for buffer access
     
-    def _validate_vad_mode(self, mode: str) -> str:
-        """Validate and potentially adjust VAD mode based on available modules."""
-        if mode == "webrtc" and not WEBRTC_AVAILABLE:
-            self.logger.warning("WebRTC VAD not available. Install with: pip install webrtcvad. Falling back to basic VAD.")
-            return "basic"
-        elif mode == "silero" and not TORCH_AVAILABLE:
-            self.logger.warning("Silero VAD requires PyTorch. Install with: pip install torch. Falling back to basic VAD.")
-            return "basic"
-        return mode
-        
     def has_recent_audio(self) -> bool:
         """Check if we've received audio data recently."""
-        return time.time() - self.last_audio_time < self.silence_duration
-        
+        # Check if current time is within silence_duration_sec of the last audio time
+        with self.buffer_lock: # Ensure thread-safe access to last_audio_time
+            return time.time() - self.last_audio_time < self.silence_duration_sec
+    
     def start(self) -> bool:
-        """Start the worker thread.
-        
-        Returns:
-            True if started successfully, False otherwise
-        """
+        """Start the worker thread."""
         with self.buffer_lock:
             if self.running:
                 self.logger.warning("Worker already running")
                 return False
-                
             self.running = True
-            self.last_audio_time = time.time()  # Reset timer
+            self.last_audio_time = time.time() # Reset timer
             
         # Clear any old data in the queue
         while not self.audio_queue.empty():
@@ -132,310 +105,188 @@ class TranscriptionWorker(Component):
             except queue.Empty:
                 break
             
-        self.thread = threading.Thread(target=self._worker)
+        self.thread = threading.Thread(target=self._worker_loop)
         self.thread.daemon = True
         self.thread.start()
-        self.logger.info(f"Transcription worker started (using Silero VAD)")
+        self.logger.info(f"Transcription worker started (Continuous Mode)")
         return True
     
     def stop(self) -> None:
-        """Stop the worker thread asynchronously by setting the running flag."""
-        with self.buffer_lock:
-            if not self.running:
-                return
+        """Stop the worker thread asynchronously by putting STOP_SIGNAL in the queue."""
+        if not self.running:
+            return
+        self.logger.debug("Putting stop signal into worker queue.")
+        self.audio_queue.put(STOP_SIGNAL)
+        # Don't set self.running = False here, let the worker loop handle it
+        # Don't join the thread here, let it finish processing the queue up to the signal
 
-            self.logger.debug("Signaling transcription worker to stop...")
-            self.running = False
-            # Do NOT join the thread here - let the _worker loop exit gracefully
-            # and trigger the completion callback.
-
-        # Clear the queue immediately to prevent processing old items after stop signal
-        # self._clear_queue() # Clearing happens naturally in signal_stop now
-
-    def signal_stop(self, final_chunk: Optional[bytes] = None) -> None:
-        """Signals the worker to stop by putting a signal in the queue."""
-        with self.buffer_lock:
-            if not self.running:
-                return
-            self.logger.debug(f"Putting stop signal into queue. Final chunk provided: {final_chunk is not None}")
-            # Put stop signal, potentially with final chunk data
-            if final_chunk:
-                self.audio_queue.put((STOP_SIGNAL, final_chunk))
-            else:
-                self.audio_queue.put(STOP_SIGNAL)
-            # Don't set self.running = False here, let the worker loop handle it
-
-    def _clear_queue(self) -> None:
-        """Clear the audio queue."""
-        while not self.audio_queue.empty():
-            try:
-                self.audio_queue.get_nowait()
-                self.audio_queue.task_done()
-            except queue.Empty:
-                break
-        self.logger.debug("Audio queue cleared.")
-
-    def close(self) -> None:
-        """Clean up resources."""
-        self.stop()
-    
     def add_audio(self, data: bytes) -> None:
         """Add audio data to the processing queue."""
-        # Thread-safe operation - queue is already thread-safe
         if self.running:
             self.audio_queue.put(data)
-            # Update last audio time with atomic operation
-            self.last_audio_time = time.time()
+            with self.buffer_lock: # Update last audio time safely
+                self.last_audio_time = time.time()
     
     def _is_silent(self, audio_data: bytes) -> bool:
-        """Determine if audio chunk is silent using the configured VAD mode.
-        
-        Args:
-            audio_data: Raw audio bytes to process
-            
-        Returns:
-            True if the audio is silent, False otherwise
-        """
-        # SilenceDetector is thread-safe, no lock needed
+        """Determine if audio chunk is silent using the detector."""
+        if not self.silence_detector._initialized:
+            # If VAD failed to init, assume everything is speech to avoid dropping audio
+            return False
         return self.silence_detector.is_silent(audio_data)
     
-    def _worker(self) -> None:
-        """Worker thread that processes audio chunks."""
-        self.logger.info(f"Worker thread started (Continuous Mode: {self.continuous_mode})")
+    def _worker_loop(self) -> None:
+        """Main worker thread loop that processes audio chunks."""
+        self.logger.info("Worker thread entering loop.")
         
-        buffer = bytearray()
+        active_speech_buffer = bytearray()
         last_speech_time = time.time()
-        should_stop = False
-        final_chunk_to_process: Optional[bytes] = None
+        total_processed_bytes = 0 # Track bytes processed within the current potential chunk
 
-        while not should_stop:
-            # Check running flag first (can be set by old stop method, though unlikely now)
-            with self.buffer_lock:
-                if not self.running:
-                    should_stop = True
-                    break # Exit loop immediately if running flag is false
-            
+        while True: # Loop until STOP_SIGNAL is received
             try:
-                # Get audio or signal from queue with timeout
-                try:
-                    item = self.audio_queue.get(timeout=0.1)
+                # Get audio data or signal from queue, wait if necessary
+                item = self.audio_queue.get(timeout=0.1) # Timeout allows periodic checks
 
-                    # --- Handle Stop Signal --- 
-                    if item is STOP_SIGNAL:
-                        self.logger.debug("Stop signal received in worker queue.")
-                        should_stop = True
-                        # Don't process regular buffer on plain stop signal
-                        buffer.clear() 
-                        continue # Go to loop end check
-                    elif isinstance(item, tuple) and item[0] is STOP_SIGNAL:
-                        self.logger.debug("Stop signal with final chunk received.")
-                        should_stop = True
-                        final_chunk_to_process = item[1]
-                        # Also clear any existing buffered audio
-                        buffer.clear()
-                        continue # Go to loop end check
-                    # --- End Stop Signal Handling ---
+                if item is STOP_SIGNAL:
+                    self.logger.debug("Stop signal received in worker queue.")
+                    # Process any remaining data in the buffer before exiting
+                    if len(active_speech_buffer) >= self.min_chunk_size_bytes:
+                        self.logger.info(f"Processing final remaining buffer chunk ({len(active_speech_buffer)} bytes) before stopping worker.")
+                        self._process_audio_buffer(bytes(active_speech_buffer))
+                    break # Exit the while loop
+                
+                # --- Regular Audio Chunk Handling --- 
+                audio_chunk: bytes = item
+                chunk_len = len(audio_chunk)
+                if chunk_len == 0: continue
+                
+                # Check VAD on the incoming chunk
+                is_chunk_silent = self._is_silent(audio_chunk)
+                
+                with self.buffer_lock: # Protect buffer and related state
+                    time_since_last_speech = time.time() - last_speech_time
+                    buffer_len = len(active_speech_buffer)
                     
-                    # --- Regular Audio Chunk Handling --- 
-                    audio_chunk = item # It must be bytes if not a stop signal
-                    
-                    # Skip processing if chunk is too small
-                    if len(audio_chunk) < 1600:  # ~50ms at 16kHz
-                        self.audio_queue.task_done()
-                        continue
+                    # --- Logic for Buffering and Processing --- 
+                    if not is_chunk_silent:
+                        # Speech detected
+                        active_speech_buffer.extend(audio_chunk)
+                        last_speech_time = time.time() # Update last speech time
+                        total_processed_bytes += chunk_len
+                        self.logger.debug(f"VAD=Speech. Added {chunk_len} bytes. Buffer: {len(active_speech_buffer)} bytes.")
                         
-                    # Check VAD
-                    is_silence = self._is_silent(audio_chunk)
-                    
-                    with self.buffer_lock:
-                        time_since_speech = time.time() - last_speech_time
-                        current_buffer_len = len(buffer)
-                        # Access the worker's current mode state safely
-                        is_continuous = self.continuous_mode 
-                        
-                        self.logger.debug(f"Worker Loop: Cont={is_continuous}, VAD={not is_silence}, BufLen={current_buffer_len}, TimeSinceSpeech={time_since_speech:.2f}s")
+                        # Process if buffer exceeds max duration/size
+                        if len(active_speech_buffer) >= self.max_chunk_bytes:
+                            self.logger.info(f"Processing chunk due to max size reached ({len(active_speech_buffer)} bytes).")
+                            self._process_audio_buffer(bytes(active_speech_buffer))
+                            active_speech_buffer.clear()
+                            total_processed_bytes = 0
+                    else:
+                        # Silence detected
+                        self.logger.debug(f"VAD=Silence. Time since speech: {time_since_last_speech:.2f}s. Buffer: {buffer_len} bytes.")
+                        # If we have a buffer with speech and enough silence has passed, process it
+                        if buffer_len >= self.min_audio_length_bytes and time_since_last_speech >= self.silence_duration_sec:
+                            self.logger.info(f"Processing chunk due to silence detected after speech ({buffer_len} bytes).")
+                            self._process_audio_buffer(bytes(active_speech_buffer))
+                            active_speech_buffer.clear()
+                            total_processed_bytes = 0
+                        elif buffer_len > 0:
+                            # Still buffer some silence if speech just ended, helps context
+                            # Limit how much silence we buffer? Maybe add a config for this.
+                            active_speech_buffer.extend(audio_chunk)
+                            total_processed_bytes += chunk_len
+                            # Process if silence makes buffer exceed max size
+                            if len(active_speech_buffer) >= self.max_chunk_bytes:
+                                self.logger.info(f"Processing chunk due to max size reached during silence ({len(active_speech_buffer)} bytes).")
+                                self._process_audio_buffer(bytes(active_speech_buffer))
+                                active_speech_buffer.clear()
+                                total_processed_bytes = 0
+                    # --- End Buffering Logic --- 
 
-                        # --- Processing Logic --- 
-                        process_now = False
-                        reason = ""
-
-                        if not is_silence:
-                            # Speech detected: Add to buffer, update last speech time
-                            buffer.extend(audio_chunk)
-                            last_speech_time = time.time()
-                        else:
-                            # Silence detected: Extend buffer only if recent speech or non-continuous
-                            # In non-continuous, we buffer silence too, up to max_chunk_size
-                            if time_since_speech < self.silence_duration or not is_continuous:
-                                buffer.extend(audio_chunk)
-                            
-                            # Check processing conditions ONLY if continuous mode
-                            if is_continuous and current_buffer_len >= self.min_audio_length and \
-                               time_since_speech >= self.silence_duration:
-                                process_now = True
-                                reason = "Silence & MinLength (Continuous)"
-                        
-                        # Check max buffer size condition (applies to both modes)
-                        # Use updated buffer length after potential extend
-                        current_buffer_len = len(buffer) # Re-check length after extend
-                        if current_buffer_len > self.max_chunk_size:
-                            process_now = True
-                            reason = "MaxSize"
-                        
-                        # --- Perform Processing if needed --- 
-                        if process_now:
-                            self.logger.debug(f"Processing ({reason}): BufLen={current_buffer_len}, TimeSinceSpeech={time_since_speech:.2f}s")
-                            audio_copy = bytes(buffer)
-                            buffer.clear()
-                            self._process_chunk(audio_copy)
-                            # Reset last_speech_time after processing to avoid immediate re-processing if silence follows
-                            last_speech_time = time.time() 
-
-                    self.audio_queue.task_done()
-                        
-                except queue.Empty:
-                    # Queue is empty
-                    with self.buffer_lock:
-                        time_since_speech = time.time() - last_speech_time
-                        current_buffer_len = len(buffer)
-                        is_continuous = self.continuous_mode # Access mode safely
-
-                        self.logger.debug(f"Worker Loop: QueueEmpty, Cont={is_continuous}, BufLen={current_buffer_len}, TimeSinceSpeech={time_since_speech:.2f}s")
-                        
-                        # Process final buffer ONLY if continuous mode and silence conditions met
-                        if is_continuous and current_buffer_len >= self.min_audio_length and \
-                           time_since_speech >= self.silence_duration:
-                            self.logger.debug(f"Processing (QueueEmpty & Silence & MinLength - Continuous): BufLen={current_buffer_len}, TimeSinceSpeech={time_since_speech:.2f}s")
-                            audio_copy = bytes(buffer)
-                            buffer.clear()
-                            self._process_chunk(audio_copy)
-                            last_speech_time = time.time() # Reset timer
-            except Exception as e:
-                self.logger.error(f"Error in worker thread: {e}")
-                # Clear buffer on error
+                self.audio_queue.task_done()
+                
+            except queue.Empty:
+                # Timeout occurred, check if we should process buffer due to inactivity
                 with self.buffer_lock:
-                    buffer.clear()
-                should_stop = True # Stop loop on error
+                    if self.running and len(active_speech_buffer) >= self.min_audio_length_bytes and not self.has_recent_audio():
+                        self.logger.info(f"Processing chunk due to inactivity timeout ({len(active_speech_buffer)} bytes).")
+                        self._process_audio_buffer(bytes(active_speech_buffer))
+                        active_speech_buffer.clear()
+                        total_processed_bytes = 0
+                continue # Continue loop after timeout check
+                
+            except Exception as e:
+                self.logger.error(f"Error in worker thread loop: {e}", exc_info=True)
+                # Decide whether to break or continue on error
+                # For now, log and continue, but clear buffer to prevent reprocessing bad data
+                with self.buffer_lock:
+                    active_speech_buffer.clear()
+                    total_processed_bytes = 0
 
         # --- Worker Loop Finished --- 
         self.logger.info("Worker thread loop finished.")
-        self.running = False # Ensure running is false
-        self.thread = None # Clear thread reference
-
-        # --- Process Final Non-Continuous Chunk (if any) --- 
-        final_result_text: Optional[str] = None
-        final_result_duration: float = 0.0
-        if final_chunk_to_process:
-            self.logger.info(f"Processing final non-continuous chunk ({len(final_chunk_to_process)/1024:.1f} KB)...")
-            if len(final_chunk_to_process) >= self.min_chunk_size:
-                try:
-                    # Use the main process_func, expect tuple
-                    result_tuple = self.process_func(final_chunk_to_process)
-                    if result_tuple:
-                        final_result_text = result_tuple[0]
-                        final_result_duration = result_tuple[1]
-                    else:
-                        final_result_text = "" # Ensure empty string if process_func returns None
-                        final_result_duration = 0.0
-
-                    # Call final result callback if it exists, pass duration
-                    if self.on_final_result:
-                        self.logger.debug(f"Sending final non-continuous result: '{final_result_text}' ({final_result_duration:.2f}s)")
-                        self.on_final_result(final_result_text, final_result_duration)
-                except Exception as e:
-                    self.logger.error(f"Error processing final non-continuous chunk: {e}")
-                    # Call final result callback with empty string and 0 duration on error?
-                    if self.on_final_result:
-                        self.logger.warning("Calling on_final_result with empty string due to processing error.")
-                        self.on_final_result("", 0.0)
-            else:
-                self.logger.info("Skipping final non-continuous chunk processing (too short).")
-                # Call final result callback with empty string and 0 duration?
-                if self.on_final_result:
-                    self.logger.debug("Calling on_final_result with empty string for short final chunk.")
-                    self.on_final_result("", 0.0)
-        # --- End Final Chunk Processing ---
-
-        # Call completion callback if provided, after the loop and final processing finishes
-        if self.completion_callback:
-            self.logger.debug("Calling completion callback.")
-            try:
-                self.completion_callback()
-            except Exception as e:
-                self.logger.error(f"Error in worker completion callback: {e}")
-        # --- End Worker Completion ---
+        self.running = False
+        self.thread = None
     
-    def _process_chunk(self, audio_data: bytes) -> None:
-        """Process a chunk of audio data intended for intermediate results."""
-        current_time = time.time()
-        audio_len = len(audio_data)
-        
-        # Log the size received
-        self.logger.debug(f"_process_chunk received audio chunk. Size: {audio_len} bytes.")
-
-        # Skip if too recent or too short
-        if (current_time - self.last_process_time < self.min_process_interval or 
-                audio_len < self.min_chunk_size):
-            self.logger.debug(f"Skipping chunk processing: Too recent or too short ({audio_len} bytes < {self.min_chunk_size} min bytes or interval issue)")
+    def _process_audio_buffer(self, audio_data: bytes) -> None:
+        """Process a complete buffer of audio data (likely containing speech)."""
+        buffer_len = len(audio_data)
+        if buffer_len < self.min_chunk_size_bytes:
+            self.logger.debug(f"Skipping transcription for small buffer chunk ({buffer_len} bytes < {self.min_chunk_size_bytes} min bytes)")
             return
-            
-        self.last_process_time = current_time
         
-        self.logger.info(f"Processing intermediate audio chunk ({audio_len/1024:.1f} KB)") # Clarify intermediate
+        self.logger.info(f"Sending buffer chunk ({buffer_len / 1024:.1f} KB) to transcription engine.")
         
-        result_tuple = None
         try:
-            # Process the audio data, expect tuple
-            result_tuple = self.process_func(audio_data)
-        except Exception as e:
-            self.logger.error(f"Error during process_func in _process_chunk: {e}", exc_info=True)
-            return # Don't proceed if processing failed
-
-        # Send result if available, unpack tuple
-        if result_tuple:
-            try:
-                result_text, result_duration = result_tuple
-                self.logger.debug(f"Got intermediate transcription result: '{result_text}' ({result_duration:.2f}s)")
-                self.on_result(result_text, result_duration) # Pass both text and duration
-            except Exception as e:
-                self.logger.error(f"Error during on_result callback in _process_chunk: {e}", exc_info=True)
-    
-    def update_vad_settings(self) -> None:
-        """Update Voice Activity Detection settings from config."""
-        if not hasattr(self, 'config') or not self.config:
-            self.logger.warning("No config available to update VAD settings")
-            return
-            
-        # Get VAD settings from config
-        vad_mode = self.config.audio.vad_mode
-        vad_threshold = self.config.audio.vad_threshold
-        
-        # Set silence duration based on whether we're in continuous mode
-        # In continuous mode, use a longer silence duration to avoid breaking speech
-        self.silence_duration = 1.5  # Default duration
-        
-        # If config has a continuous_mode setting, use a longer silence duration
-        if hasattr(self.config.transcription, 'continuous_mode') and self.config.transcription.continuous_mode:
-            self.silence_duration = 2.5  # Longer silence for continuous mode
-            self.logger.debug(f"Continuous mode detected - using longer silence duration: {self.silence_duration}s")
-            
-        # Update the detector with new settings
-        if hasattr(self, 'silence_detector'):
-            self.silence_detector.update_settings(
-                mode=vad_mode,
-                threshold=vad_threshold
+            # Transcribe the audio - DO NOT provide a save path for intermediate chunks
+            result: TranscriptionResult = self.transcriber.transcribe(
+                audio=audio_data, 
+                target_wav_path=None # Explicitly None
             )
             
-        # Log the update
-        self.logger.debug(f"Updated VAD settings: mode={vad_mode}, silence_duration={self.silence_duration}s")
+            # Check if the result actually contains meaningful text
+            text = result.get("text", "").strip()
+            
+            if text:
+                self.logger.debug(f"Worker received transcription result: '{text[:50]}...'')")
+                # Send the transcribed text back via the callback
+                try:
+                    self.on_result(result)
+                except Exception as cb_err:
+                    self.logger.error(f"Error in worker on_result callback: {cb_err}")
+            else:
+                self.logger.debug("Worker received empty transcription result.")
+                
+        except Exception as e:
+            # Log errors from transcription engine
+            self.logger.error(f"Error during transcription call in worker: {e}", exc_info=True)
+            # Optionally, notify main thread of error?
     
-    def set_continuous_mode(self, enabled: bool) -> None:
-        """Update the worker's continuous mode state."""
-        with self.buffer_lock: # Use lock for thread safety
-            if self.continuous_mode != enabled:
-                self.continuous_mode = enabled
-                self.logger.info(f"Worker continuous mode set to: {self.continuous_mode}")
-                # Optional: Reset buffer or timers if needed when mode changes, but maybe not necessary here.
+    def update_settings(self) -> None:
+        """Update worker settings from config (e.g., VAD threshold)."""
+        self.logger.debug("Updating worker settings from config.")
+        if self.silence_detector._initialized:
+            self.silence_detector.update_settings() # Reads from config passed to detector
+        
+        # Update durations/sizes read from config
+        with self.buffer_lock: # Ensure thread safety if these are read in loop
+            self.min_audio_length_bytes = int(self.config.audio.min_audio_length_sec * self.sample_rate * 2)
+            self.silence_duration_sec = self.config.audio.silence_duration_sec
+            self.max_chunk_duration_sec = self.config.audio.max_chunk_duration_sec 
+            self.max_chunk_bytes = int(self.max_chunk_duration_sec * self.sample_rate * 2)
+            self.min_chunk_size_bytes = self.config.transcription.min_chunk_size_bytes
+            self.logger.info(f"Worker settings updated: SilenceDur={self.silence_duration_sec}s, MaxChunk={self.max_chunk_duration_sec}s")
+    
+    def close(self) -> None:
+        """Clean up resources."""
+        self.stop() # Signal the worker to stop
+        # Wait for thread to finish? Optional, depends on desired shutdown behavior.
+        # if self.thread and self.thread.is_alive():
+        #    self.logger.debug("Waiting for worker thread to join...")
+        #    self.thread.join(timeout=2.0) # Wait max 2 seconds
+        #    if self.thread.is_alive():
+        #         self.logger.warning("Worker thread did not join cleanly.")
+        self.logger.debug("TranscriptionWorker closed.")
     
     def __del__(self) -> None:
         """Ensure resources are cleaned up."""

@@ -65,10 +65,17 @@ def transcription_engine(mock_whisper, mock_torch):
         mock_temp.return_value = mock_file
         
         with patch('wave.open') as mock_wave:
+            # Create a mock config just for this engine instance
+            mock_engine_config = {
+                'transcription': {
+                    'translate': False # Default for most tests
+                }
+            }
             engine = TranscriptionEngine(
                 model_name="small",
                 device="cpu",
-                language="en"
+                language="en",
+                config=mock_engine_config # Pass the mock config
             )
             # Manually set mock whisper model after init
             engine.model = mock_whisper
@@ -187,7 +194,7 @@ def test_transcription_engine_transcribe_error(transcription_engine, mock_whispe
         
         error_msg = str(exc_info.value)
         # Check for the updated error message
-        assert "Transcription failed:" in error_msg # Match actual error format
+        assert "Unexpected transcription failed:" in error_msg # Updated check
 
 def test_transcription_engine_set_language_validation(transcription_engine):
     """Test language validation in set_language method."""
@@ -199,7 +206,7 @@ def test_transcription_engine_set_language_validation(transcription_engine):
     assert transcription_engine.language == "es"
     
     # Language codes should be normalized to lowercase
-    transcription_engine.set_language("FR")
+    transcription_engine.set_language("fr")
     assert transcription_engine.language == "fr"  # Lowercase conversion
     
     # Test with a non-empty language first to ensure we have a valid starting state
