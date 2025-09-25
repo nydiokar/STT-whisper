@@ -234,7 +234,7 @@ class AudioRecorder(
     /**
      * Check if currently recording
      */
-    fun isRecording(): Boolean = isRecording
+    fun isCurrentlyRecording(): Boolean = isRecording
 
     /**
      * Get audio info

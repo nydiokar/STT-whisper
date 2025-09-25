@@ -5,7 +5,10 @@ import android.util.Log
 import com.whispercpp.whisper.WhisperContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import java.io.File
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 
 class WhisperEngine(
     private val context: Context,
@@ -45,6 +48,26 @@ class WhisperEngine(
         }
     }
 
+    suspend fun initializeFromAssets(assetPath: String): Boolean = withContext(Dispatchers.IO) {
+        try {
+            release()
+
+            whisperContext = WhisperContext.createContextFromAsset(
+                context.assets,
+                assetPath
+            )
+
+            isInitialized = true
+            Log.i(TAG, "Whisper initialized from assets: $assetPath")
+
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to initialize Whisper from assets", e)
+            isInitialized = false
+            false
+        }
+    }
+
     suspend fun transcribe(audioData: ByteArray): TranscriptionResult = withContext(Dispatchers.IO) {
         if (!isInitialized || whisperContext == null) {
             throw IllegalStateException("Whisper not initialized. Call initialize() first.")
@@ -58,20 +81,33 @@ class WhisperEngine(
         Log.i(TAG, "Transcribing ${audioDurationSec}s of audio")
 
         try {
-            val audioFloat = AudioUtils.bytesToFloat(audioData)
-            val fullText = whisperContext!!.transcribeData(audioFloat, printTimestamp = false)
+            // Convert ByteArray to FloatArray (PCM 16-bit to float32)
+            Log.d(TAG, "Converting ${audioData.size} bytes to float array...")
+            val floatArray = convertBytesToFloats(audioData)
+            Log.d(TAG, "Float array size: ${floatArray.size} samples")
 
-            Log.i(TAG, "Transcription complete: text length: ${fullText.length}")
+            // Call the actual Whisper API with timeout
+            Log.d(TAG, "Starting Whisper transcription...")
+            val startTime = System.currentTimeMillis()
+            val transcriptionText = withTimeout(300_000) { // extend timeout to 5 minutes for stability during testing
+                whisperContext!!.transcribeData(floatArray, printTimestamp = false)
+            }
+            val elapsedMs = System.currentTimeMillis() - startTime
 
-            TranscriptionResult(
-                text = fullText.trim(),
+            Log.i(TAG, "Transcription complete in ${elapsedMs}ms: '$transcriptionText'")
+
+            return@withContext TranscriptionResult(
+                text = transcriptionText.trim(),
                 language = language,
-                segments = emptyList()
+                segments = emptyList(),
+                confidence = 1.0f,
+                processingTimeMs = 0
             )
 
         } catch (e: Exception) {
-            Log.e(TAG, "Transcription failed", e)
-            throw TranscriptionException("Failed to transcribe audio", e)
+            Log.e(TAG, "Transcription failed: ${e.message}", e)
+            e.printStackTrace()
+            throw TranscriptionException("Failed to transcribe audio: ${e.message}", e)
         }
     }
 
@@ -95,12 +131,31 @@ class WhisperEngine(
             Log.e(TAG, "Error releasing Whisper resources", e)
         }
     }
+
+    /**
+     * Convert PCM 16-bit audio bytes to float32 array for Whisper
+     * Whisper expects audio samples normalized to [-1.0, 1.0]
+     */
+    private fun convertBytesToFloats(audioData: ByteArray): FloatArray {
+        val floatArray = FloatArray(audioData.size / 2)
+        val byteBuffer = ByteBuffer.wrap(audioData).order(ByteOrder.LITTLE_ENDIAN)
+
+        for (i in floatArray.indices) {
+            // Convert 16-bit PCM to float [-1.0, 1.0]
+            val sample = byteBuffer.short.toFloat() / 32768.0f
+            floatArray[i] = sample
+        }
+
+        return floatArray
+    }
 }
 
 data class TranscriptionResult(
     val text: String,
     val language: String,
-    val segments: List<Segment>
+    val segments: List<Segment>,
+    val confidence: Float = 1.0f,
+    val processingTimeMs: Long = 0
 )
 
 data class Segment(

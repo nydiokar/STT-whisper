@@ -14,26 +14,15 @@ import kotlinx.coroutines.flow.*
  * AudioRecorder → WhisperEngine → TextProcessor → Output
  */
 class VoiceInputPipeline(
-    private val context: Context,
-    private val config: AppConfig
+    private val audioRecorder: AudioRecorder,
+    private val whisperEngine: WhisperEngine,
+    private val config: AppConfig,
+    private val onResult: ((TranscriptionResult) -> Unit)? = null
 ) {
 
     companion object {
         private const val TAG = "VoiceInputPipeline"
     }
-
-    // Core components
-    private val audioRecorder = AudioRecorder(
-        sampleRate = config.audio.sampleRate,
-        chunkSize = config.audio.chunkSize,
-        channels = config.audio.channels
-    )
-
-    private val whisperEngine = WhisperEngine(
-        context = context,
-        modelName = config.transcription.modelName,
-        language = config.transcription.language
-    )
 
     private val textProcessor = TextProcessor()
 
@@ -49,55 +38,22 @@ class VoiceInputPipeline(
     private var onTranscriptionUpdate: ((String) -> Unit)? = null
     private var onError: ((Exception) -> Unit)? = null
 
-    /**
-     * Initialize pipeline with model
-     * @param modelPath Path to GGML model file
-     */
-    suspend fun initialize(modelPath: String): Boolean {
-        return try {
-            Log.i(TAG, "Initializing voice input pipeline...")
-
-            // Initialize audio recorder
-            if (!audioRecorder.initialize()) {
-                Log.e(TAG, "Failed to initialize audio recorder")
-                return false
-            }
-
-            // Initialize Whisper engine
-            if (!whisperEngine.initialize(modelPath)) {
-                Log.e(TAG, "Failed to initialize Whisper engine")
-                return false
-            }
-
-            Log.i(TAG, "Pipeline initialized successfully")
-            true
-        } catch (e: Exception) {
-            Log.e(TAG, "Pipeline initialization failed", e)
-            onError?.invoke(e)
-            false
-        }
-    }
 
     /**
-     * Start recording and transcribing
-     * @param onUpdate Callback for transcription updates
-     * @param onError Callback for errors
+     * Start listening and transcribing
      */
-    fun start(
-        onUpdate: (String) -> Unit,
-        onError: (Exception) -> Unit = {}
-    ) {
+    fun startListening() {
         if (isRunning) {
             Log.w(TAG, "Pipeline already running")
             return
         }
 
-        this.onTranscriptionUpdate = onUpdate
-        this.onError = onError
+        // Use constructor callback
 
         // Start recording
         if (!audioRecorder.start()) {
-            onError(IllegalStateException("Failed to start audio recording"))
+            val error = IllegalStateException("Failed to start audio recording")
+            Log.e(TAG, "Failed to start recording", error)
             return
         }
 
@@ -110,8 +66,7 @@ class VoiceInputPipeline(
                 processAudioStream()
             } catch (e: Exception) {
                 Log.e(TAG, "Pipeline error", e)
-                onError(e)
-                stop()
+                stopListening()
             }
         }
 
@@ -119,10 +74,10 @@ class VoiceInputPipeline(
     }
 
     /**
-     * Stop recording and transcribing
+     * Stop listening and transcribing
      * @return Final accumulated text
      */
-    suspend fun stop(): String {
+    suspend fun stopListening(): String {
         if (!isRunning) {
             return accumulatedText
         }
@@ -141,7 +96,8 @@ class VoiceInputPipeline(
 
                 if (filtered.isNotEmpty()) {
                     accumulatedText = textProcessor.appendText(accumulatedText, filtered)
-                    onTranscriptionUpdate?.invoke(accumulatedText)
+                    // Use result callback if provided
+                    onResult?.invoke(TranscriptionResult(filtered, "en", emptyList()))
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Error transcribing final audio", e)
@@ -194,9 +150,9 @@ class VoiceInputPipeline(
             // Append to accumulated text with overlap detection
             accumulatedText = textProcessor.appendText(accumulatedText, filtered)
 
-            // Notify update
+            // Notify result callback
             withContext(Dispatchers.Main) {
-                onTranscriptionUpdate?.invoke(accumulatedText)
+                onResult?.invoke(result)
             }
 
             Log.d(TAG, "Transcription update: '$filtered'")
@@ -208,7 +164,6 @@ class VoiceInputPipeline(
      */
     fun clearText() {
         accumulatedText = ""
-        onTranscriptionUpdate?.invoke("")
     }
 
     /**
@@ -222,7 +177,7 @@ class VoiceInputPipeline(
     fun getStatus(): PipelineStatus {
         return PipelineStatus(
             isRunning = isRunning,
-            isRecording = audioRecorder.isRecording(),
+            isRecording = audioRecorder.isCurrentlyRecording(),
             accumulatedTextLength = accumulatedText.length,
             modelInfo = whisperEngine.getModelInfo()
         )
@@ -231,7 +186,7 @@ class VoiceInputPipeline(
     /**
      * Release all resources
      */
-    fun release() {
+    suspend fun release() {
         scope.cancel()
         audioRecorder.release()
         whisperEngine.release()

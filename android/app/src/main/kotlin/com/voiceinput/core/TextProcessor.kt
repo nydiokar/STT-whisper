@@ -92,12 +92,12 @@ class TextProcessor(private val minWords: Int = 2) {
             // Check startswith
             if (textLower.startsWith(pattern)) {
                 // If it's an exact match (or only differs by surrounding spaces/punct), return empty
-                if (processedText.trim(" .!?,").length == patternLen) {
+                if (processedText.trim(' ', '.', '!', '?', ',').length == patternLen) {
                     return ""
                 }
                 // If it starts with pattern + space/punct
                 if (processedText.length > patternLen && processedText[patternLen] in " .!?,") {
-                    processedText = processedText.substring(patternLen).trimStart(" .!?,")
+                    processedText = processedText.substring(patternLen).trimStart(' ', '.', '!', '?', ',')
                     modified = true
                     if (processedText.isEmpty()) return ""
                 }
@@ -106,7 +106,7 @@ class TextProcessor(private val minWords: Int = 2) {
             // Check endswith
             if (textLower.endsWith(pattern)) {
                 // If it's an exact match (or only differs by surrounding spaces/punct), return empty
-                if (processedText.trim(" .!?,").length == patternLen) {
+                if (processedText.trim(' ', '.', '!', '?', ',').length == patternLen) {
                     return ""
                 }
                 // If it ends with space/punct + pattern

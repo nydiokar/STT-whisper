@@ -161,7 +161,7 @@ Java_com_whispercpp_whisper_WhisperLib_00024Companion_freeContext(
     whisper_free(context);
 }
 
-JNIEXPORT void JNICALL
+JNIEXPORT jstring JNICALL
 Java_com_whispercpp_whisper_WhisperLib_00024Companion_fullTranscribe(
         JNIEnv *env, jobject thiz, jlong context_ptr, jint num_threads, jfloatArray audio_data) {
     UNUSED(thiz);
@@ -169,28 +169,57 @@ Java_com_whispercpp_whisper_WhisperLib_00024Companion_fullTranscribe(
     jfloat *audio_data_arr = (*env)->GetFloatArrayElements(env, audio_data, NULL);
     const jsize audio_data_length = (*env)->GetArrayLength(env, audio_data);
 
-    // The below adapted from the Objective-C iOS sample
+    // Optimized parameters for production (not debug!)
     struct whisper_full_params params = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
-    params.print_realtime = true;
-    params.print_progress = false;
-    params.print_timestamps = true;
-    params.print_special = false;
-    params.translate = false;
-    params.language = "en";
-    params.n_threads = num_threads;
-    params.offset_ms = 0;
-    params.no_context = true;
-    params.single_segment = false;
+    params.print_realtime = false;     // ❌ DISABLE - kills performance
+    params.print_progress = false;     // ✅ Keep disabled
+    params.print_timestamps = false;   // ❌ DISABLE - we don't need timestamps for basic transcription
+    params.print_special = false;      // ✅ Keep disabled
+    params.translate = false;          // ✅ Keep disabled
+    params.language = "en";            // ✅ Good
+    params.n_threads = num_threads;    // ✅ Good
+    params.offset_ms = 0;              // ✅ Good
+    params.no_context = false;         // ❌ ENABLE context for better accuracy
+    params.single_segment = false;     // ✅ Good for longer audio
 
     whisper_reset_timings(context);
 
-    LOGI("About to run whisper_full");
-    if (whisper_full(context, params, audio_data_arr, audio_data_length) != 0) {
-        LOGI("Failed to run the model");
+    LOGI("About to run whisper_full with %d samples, %d threads", audio_data_length, num_threads);
+    LOGI("Whisper params: realtime=%d, timestamps=%d, context=%d", params.print_realtime, params.print_timestamps, params.no_context);
+
+    int result = whisper_full(context, params, audio_data_arr, audio_data_length);
+
+    LOGI("whisper_full returned: %d", result);
+    if (result != 0) {
+        LOGI("Failed to run the model, error code: %d", result);
+        (*env)->ReleaseFloatArrayElements(env, audio_data, audio_data_arr, JNI_ABORT);
+        return (*env)->NewStringUTF(env, "");  // Return empty string on error
     } else {
+        LOGI("Model ran successfully, printing timings...");
         whisper_print_timings(context);
+        LOGI("Timings printed, transcription complete");
+        
+        // Extract transcription text
+        const int n_segments = whisper_full_n_segments(context);
+        char *full_text = malloc(1);
+        full_text[0] = '\0';
+        
+        for (int i = 0; i < n_segments; i++) {
+            const char *segment_text = whisper_full_get_segment_text(context, i);
+            if (segment_text != NULL) {
+                // Concatenate segment text
+                size_t old_len = strlen(full_text);
+                size_t segment_len = strlen(segment_text);
+                full_text = realloc(full_text, old_len + segment_len + 1);
+                strcat(full_text, segment_text);
+            }
+        }
+        
+        jstring result_string = (*env)->NewStringUTF(env, full_text);
+        free(full_text);
+        (*env)->ReleaseFloatArrayElements(env, audio_data, audio_data_arr, JNI_ABORT);
+        return result_string;
     }
-    (*env)->ReleaseFloatArrayElements(env, audio_data, audio_data_arr, JNI_ABORT);
 }
 
 JNIEXPORT jint JNICALL

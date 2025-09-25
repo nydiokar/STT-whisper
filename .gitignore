@@ -29,6 +29,7 @@ local.properties
 android/.gradle/
 android/build/
 android/app/build/
+android/whisperlib/build/
 android/local.properties
 android/.idea/
 
@@ -39,11 +40,20 @@ models/
 android/app/src/main/assets/models/*.bin
 !android/app/src/main/assets/models/.gitkeep
 
+# Audio files (test files)
+*.wav
+*.mp3
+*.m4a
+android/app/src/main/assets/*.wav
+
 # IDE
 .vscode/
 .idea/
+.claude/
 
 # Misc
 plans/
 *.log
 .DS_Store
+
+*.hprof

@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mkdir:*)",
+      "Bash(./gradlew:*)"
+    ],
+    "deny": [
+      "Read(.env)",
+      "Write(.env)",
+      "Write(.gitignore)"
+    ],
+    "ask": []
+  }
+}

@@ -84,7 +84,9 @@ data class AppConfig(
 
     companion object {
         val VALID_LOG_LEVELS = listOf("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
-        private const val PREFS_KEY_CONFIG = "app_config_json"
+        const val PREFS_KEY_CONFIG = "app_config_json"  // Made public
+
+        fun default(): AppConfig = AppConfig()
     }
 }
 

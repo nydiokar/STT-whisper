@@ -16,24 +16,29 @@ class WhisperContext private constructor(private var ptr: Long) {
         Executors.newSingleThreadExecutor().asCoroutineDispatcher()
     )
 
-    suspend fun transcribeData(data: FloatArray, printTimestamp: Boolean = true): String = withContext(scope.coroutineContext) {
-        require(ptr != 0L)
-        val numThreads = WhisperCpuConfig.preferredThreadCount
-        Log.d(LOG_TAG, "Selecting $numThreads threads")
-        WhisperLib.fullTranscribe(ptr, numThreads, data)
-        val textCount = WhisperLib.getTextSegmentCount(ptr)
-        return@withContext buildString {
-            for (i in 0 until textCount) {
-                if (printTimestamp) {
-                    val textTimestamp = "[${toTimestamp(WhisperLib.getTextSegmentT0(ptr, i))} --> ${toTimestamp(WhisperLib.getTextSegmentT1(ptr, i))}]"
-                    val textSegment = WhisperLib.getTextSegment(ptr, i)
-                    append("$textTimestamp: $textSegment\n")
-                } else {
-                    append(WhisperLib.getTextSegment(ptr, i))
+    suspend fun transcribeData(data: FloatArray, printTimestamp: Boolean = true): String =
+        withContext(Dispatchers.Default) {
+            require(ptr != 0L)
+            val numThreads = Runtime.getRuntime().availableProcessors().coerceAtLeast(4)
+
+            // Call JNI function that now returns the transcription text directly
+            val transcriptionText = WhisperLib.fullTranscribe(ptr, numThreads, data)
+            
+            if (printTimestamp) {
+                // If timestamps are requested, get segment info
+                val textCount = WhisperLib.getTextSegmentCount(ptr)
+                buildString {
+                    for (i in 0 until textCount) {
+                        val textTimestamp = "[${toTimestamp(WhisperLib.getTextSegmentT0(ptr, i))} --> ${toTimestamp(WhisperLib.getTextSegmentT1(ptr, i))}]"
+                        val textSegment = WhisperLib.getTextSegment(ptr, i)
+                        append("$textTimestamp: $textSegment\n")
+                    }
                 }
+            } else {
+                // Return the transcription text directly from JNI
+                transcriptionText
             }
         }
-    }
 
     suspend fun benchMemory(nthreads: Int): String = withContext(scope.coroutineContext) {
         return@withContext WhisperLib.benchMemcpy(nthreads)
@@ -118,13 +123,10 @@ private class WhisperLib {
             }
 
             if (loadVfpv4) {
-                Log.d(LOG_TAG, "Loading libwhisper_vfpv4.so")
                 System.loadLibrary("whisper_vfpv4")
             } else if (loadV8fp16) {
-                Log.d(LOG_TAG, "Loading libwhisper_v8fp16_va.so")
                 System.loadLibrary("whisper_v8fp16_va")
             } else {
-                Log.d(LOG_TAG, "Loading libwhisper.so")
                 System.loadLibrary("whisper")
             }
         }
@@ -134,7 +136,7 @@ private class WhisperLib {
         external fun initContextFromAsset(assetManager: AssetManager, assetPath: String): Long
         external fun initContext(modelPath: String): Long
         external fun freeContext(contextPtr: Long)
-        external fun fullTranscribe(contextPtr: Long, numThreads: Int, audioData: FloatArray)
+        external fun fullTranscribe(contextPtr: Long, numThreads: Int, audioData: FloatArray): String
         external fun getTextSegmentCount(contextPtr: Long): Int
         external fun getTextSegment(contextPtr: Long, index: Int): String
         external fun getTextSegmentT0(contextPtr: Long, index: Int): Long
