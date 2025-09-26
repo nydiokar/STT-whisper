@@ -7,13 +7,14 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 
 /**
- * Complete voice input pipeline connecting all components
+ * Complete voice input pipeline connecting all components with VAD
  * Mirrors desktop/voice_input_service/service.py VoiceInputService
  *
- * Pipeline flow:
- * AudioRecorder → WhisperEngine → TextProcessor → Output
+ * Pipeline flow (Phase 3 with VAD):
+ * AudioRecorder → AudioProcessor (with SileroVAD) → WhisperEngine → TextProcessor → Output
  */
 class VoiceInputPipeline(
+    private val context: Context,
     private val audioRecorder: AudioRecorder,
     private val whisperEngine: WhisperEngine,
     private val config: AppConfig,
@@ -25,6 +26,7 @@ class VoiceInputPipeline(
     }
 
     private val textProcessor = TextProcessor()
+    private val audioProcessor: AudioProcessor
 
     // State
     private var isRunning = false
@@ -38,17 +40,47 @@ class VoiceInputPipeline(
     private var onTranscriptionUpdate: ((String) -> Unit)? = null
     private var onError: ((Exception) -> Unit)? = null
 
+    init {
+        // Initialize AudioProcessor with VAD (Phase 3 integration)
+        audioProcessor = AudioProcessor(
+            context = context,
+            whisperEngine = whisperEngine,
+            textProcessor = textProcessor,
+            config = config,
+            onResult = { result ->
+                handleTranscriptionResult(result)
+            }
+        )
+    }
+
 
     /**
-     * Start listening and transcribing
+     * Handle transcription result from AudioProcessor (replaces processAudioChunk)
      */
-    fun startListening() {
+    private fun handleTranscriptionResult(result: TranscriptionResult) {
+        val filtered = result.text
+
+        if (filtered.isNotEmpty()) {
+            // Append to accumulated text with overlap detection
+            accumulatedText = textProcessor.appendText(accumulatedText, filtered)
+
+            // Notify result callback on main thread
+            scope.launch(Dispatchers.Main) {
+                onResult?.invoke(result)
+            }
+
+            Log.d(TAG, "Transcription update: '$filtered'")
+        }
+    }
+
+    /**
+     * Start listening and transcribing (Phase 3 with VAD)
+     */
+    suspend fun startListening() {
         if (isRunning) {
             Log.w(TAG, "Pipeline already running")
             return
         }
-
-        // Use constructor callback
 
         // Start recording
         if (!audioRecorder.start()) {
@@ -57,20 +89,28 @@ class VoiceInputPipeline(
             return
         }
 
+        // Start AudioProcessor with VAD
+        if (!audioProcessor.start()) {
+            audioRecorder.stop()
+            val error = IllegalStateException("Failed to start audio processor")
+            Log.e(TAG, "Failed to start audio processor", error)
+            return
+        }
+
         isRunning = true
         accumulatedText = ""
 
-        // Start processing pipeline
+        // Start feeding audio from recorder to processor
         job = scope.launch {
             try {
-                processAudioStream()
+                feedAudioToProcessor()
             } catch (e: Exception) {
                 Log.e(TAG, "Pipeline error", e)
                 stopListening()
             }
         }
 
-        Log.i(TAG, "Pipeline started")
+        Log.i(TAG, "Pipeline started with VAD")
     }
 
     /**
@@ -85,78 +125,30 @@ class VoiceInputPipeline(
         isRunning = false
         job?.cancelAndJoin()
 
-        // Stop recording and get final audio
-        val finalAudio = audioRecorder.stop()
+        // Stop AudioProcessor (which will process any remaining buffered audio)
+        audioProcessor.stop()
 
-        // Transcribe final chunk if has audio
-        if (finalAudio.isNotEmpty()) {
-            try {
-                val result = whisperEngine.transcribe(finalAudio)
-                val filtered = textProcessor.filterHallucinations(result.text)
-
-                if (filtered.isNotEmpty()) {
-                    accumulatedText = textProcessor.appendText(accumulatedText, filtered)
-                    // Use result callback if provided
-                    onResult?.invoke(TranscriptionResult(filtered, "en", emptyList()))
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Error transcribing final audio", e)
-            }
-        }
+        // Stop recording
+        audioRecorder.stop()
 
         Log.i(TAG, "Pipeline stopped. Final text: ${accumulatedText.length} chars")
         return accumulatedText
     }
 
     /**
-     * Process audio stream with transcription
+     * Feed audio stream from recorder to processor (replaces processAudioStream)
      */
-    private suspend fun processAudioStream() {
+    private suspend fun feedAudioToProcessor() {
         audioRecorder.audioStream()
             .buffer(capacity = 10) // Buffer up to 10 chunks
             .collect { audioChunk ->
                 try {
-                    processAudioChunk(audioChunk)
+                    // Feed audio chunk to processor (which handles VAD and transcription)
+                    audioProcessor.addAudio(audioChunk)
                 } catch (e: Exception) {
-                    Log.e(TAG, "Error processing audio chunk", e)
+                    Log.e(TAG, "Error feeding audio to processor", e)
                 }
             }
-    }
-
-    /**
-     * Process a single audio chunk
-     */
-    private suspend fun processAudioChunk(audioChunk: ByteArray) {
-        // Check if chunk has enough audio (avoid transcribing silence)
-        if (audioChunk.size < config.transcription.minChunkSizeBytes) {
-            return
-        }
-
-        // Optional: Check if silent (basic RMS check)
-        if (AudioUtils.isSilent(audioChunk, threshold = 0.01f)) {
-            Log.d(TAG, "Skipping silent chunk")
-            return
-        }
-
-        Log.d(TAG, "Processing audio chunk: ${audioChunk.size} bytes")
-
-        // Transcribe
-        val result = whisperEngine.transcribe(audioChunk)
-
-        // Filter hallucinations
-        val filtered = textProcessor.filterHallucinations(result.text)
-
-        if (filtered.isNotEmpty()) {
-            // Append to accumulated text with overlap detection
-            accumulatedText = textProcessor.appendText(accumulatedText, filtered)
-
-            // Notify result callback
-            withContext(Dispatchers.Main) {
-                onResult?.invoke(result)
-            }
-
-            Log.d(TAG, "Transcription update: '$filtered'")
-        }
     }
 
     /**
@@ -172,6 +164,14 @@ class VoiceInputPipeline(
     fun getText(): String = accumulatedText
 
     /**
+     * Update pipeline settings
+     */
+    fun updateSettings(newConfig: AppConfig) {
+        audioProcessor.updateSettings(newConfig)
+        Log.d(TAG, "Pipeline settings updated")
+    }
+
+    /**
      * Get pipeline status
      */
     fun getStatus(): PipelineStatus {
@@ -179,14 +179,24 @@ class VoiceInputPipeline(
             isRunning = isRunning,
             isRecording = audioRecorder.isCurrentlyRecording(),
             accumulatedTextLength = accumulatedText.length,
-            modelInfo = whisperEngine.getModelInfo()
+            modelInfo = whisperEngine.getModelInfo(),
+            isProcessorRunning = audioProcessor.isRunning()
         )
+    }
+
+    /**
+     * Test VAD with synthetic audio (for testing purposes)
+     */
+    suspend fun testVAD(audioData: ByteArray): Boolean {
+        return audioProcessor.isSilent(audioData)
     }
 
     /**
      * Release all resources
      */
     suspend fun release() {
+        stopListening() // Ensure everything is stopped
+        audioProcessor.close() // Clean up VAD resources
         scope.cancel()
         audioRecorder.release()
         whisperEngine.release()
@@ -201,5 +211,6 @@ data class PipelineStatus(
     val isRunning: Boolean,
     val isRecording: Boolean,
     val accumulatedTextLength: Int,
-    val modelInfo: ModelInfo
+    val modelInfo: ModelInfo,
+    val isProcessorRunning: Boolean = false
 )

@@ -1,0 +1,374 @@
+package com.voiceinput.core
+
+import android.content.Context
+import android.util.Log
+import ai.onnxruntime.*
+import com.voiceinput.config.AppConfig
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.io.IOException
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import java.nio.FloatBuffer
+
+/**
+ * Silence detection utility using Silero VAD ONNX model.
+ * Port of desktop/voice_input_service/utils/silence_detection.py
+ *
+ * Handles voice activity detection using the Silero VAD model with ONNX Runtime.
+ * Maintains the same logic and configuration as the desktop version but adapted for Android.
+ */
+class SileroVAD(
+    private val context: Context,
+    private var config: AppConfig
+) {
+
+    companion object {
+        private const val TAG = "SileroVAD"
+        private const val MODEL_FILENAME = "silero_vad.onnx"
+
+        // VAD frame settings (matching desktop implementation)
+        private const val FRAME_DURATION_MS = 30 // Silero examples use 30ms frames
+        private const val BYTES_PER_SAMPLE = 2   // 16-bit PCM = 2 bytes per sample
+    }
+
+    private var ortEnvironment: OrtEnvironment? = null
+    private var ortSession: OrtSession? = null
+    private var initialized = false
+
+    // State tensor for stateful RNN (shape [2, None, 128])
+    private var stateState: OnnxTensor? = null
+
+    // Configuration values (cached for performance)
+    private var sampleRate: Int = config.audio.sampleRate
+    private var vadThreshold: Float = config.audio.vadThreshold
+
+    // Frame size calculations (matching desktop logic)
+    private val frameSizeSamples: Int = (sampleRate * (FRAME_DURATION_MS / 1000.0)).toInt()
+    private val frameSizeBytes: Int = frameSizeSamples * BYTES_PER_SAMPLE
+
+    init {
+        // Validate sample rate compatibility (matching desktop validation)
+        if (sampleRate !in listOf(8000, 16000)) {
+            Log.w(TAG, "Silero VAD model typically supports 8kHz or 16kHz. " +
+                      "Current config rate is ${sampleRate}Hz. VAD might not work as expected.")
+        }
+
+        Log.d(TAG, "VAD Frame size: $frameSizeBytes bytes (${FRAME_DURATION_MS}ms) at ${sampleRate}Hz")
+
+        initializeDetector()
+    }
+
+    /**
+     * Initialize the Silero VAD detector using ONNX Runtime.
+     * Port of desktop _init_detector() method
+     */
+    private fun initializeDetector() {
+        try {
+            Log.i(TAG, "Loading Silero VAD model...")
+
+            // Initialize ONNX Runtime environment
+            ortEnvironment = OrtEnvironment.getEnvironment()
+
+            // Load model from assets
+            val modelBytes = context.assets.open("models/$MODEL_FILENAME").use { inputStream ->
+                inputStream.readBytes()
+            }
+
+            // Create session options for Android optimization
+            val sessionOptions = OrtSession.SessionOptions().apply {
+                // Use CPU provider for maximum compatibility
+                // Could be enhanced later with NNAPI provider for hardware acceleration
+                addConfigEntry("session.load_model_format", "ONNX")
+                setOptimizationLevel(OrtSession.SessionOptions.OptLevel.BASIC_OPT)
+            }
+
+            // Create ONNX session
+            ortSession = ortEnvironment!!.createSession(modelBytes, sessionOptions)
+
+            // Initialize state tensor (shape [2, 1, 128])
+            initializeStateTensor()
+
+            initialized = true
+            Log.i(TAG, "Silero VAD model loaded successfully")
+
+        } catch (e: Exception) {
+            Log.e(TAG, "CRITICAL Error initializing Silero VAD: ${e.message}", e)
+            cleanup()
+            initialized = false
+            // Note: Not throwing exception to allow graceful degradation (matching desktop behavior)
+        }
+    }
+
+    /**
+     * Determine if audio chunk is silent using Silero VAD.
+     * Port of desktop is_silent() method with identical logic.
+     *
+     * @param audioChunk Raw audio bytes (16-bit PCM, matching sample_rate) to analyze.
+     *                   Should ideally be a multiple of frame_size_bytes, but the underlying
+     *                   model can handle variable lengths.
+     * @return True if audio is determined to be silent, False if speech is detected (or if VAD failed).
+     */
+    suspend fun isSilent(audioChunk: ByteArray): Boolean = withContext(Dispatchers.Default) {
+        // Fail-safe checks (matching desktop behavior)
+        if (!initialized || ortSession == null) {
+            Log.w(TAG, "Silero VAD not initialized, cannot perform silence detection. Assuming NOT silent.")
+            return@withContext false // Fail safe: assume not silent if VAD isn't working
+        }
+
+        if (audioChunk.isEmpty()) {
+            Log.d(TAG, "Received empty audio chunk, assuming silent.")
+            return@withContext true
+        }
+
+        try {
+            // Convert bytes to float32 array (matching desktop preprocessing)
+            val audioFloat32 = convertBytesToFloat32(audioChunk)
+
+            // Run inference with both audio and sample rate (matching desktop behavior)
+            val speechProb = runInference(audioFloat32)
+
+            // Apply threshold from config (matching desktop logic)
+            val isSpeech = speechProb >= vadThreshold
+
+            // Log sparingly for performance (matching desktop approach)
+            Log.d(TAG, "VAD Result: Speech Prob=${"%.3f".format(speechProb)}, Threshold=$vadThreshold, IsSpeech=$isSpeech")
+
+            return@withContext !isSpeech // Return true if silent (i.e., not speech)
+
+        } catch (e: Exception) {
+            Log.e(TAG, "Error during Silero VAD processing: ${e.message}", e)
+            return@withContext false // Fail safe: assume not silent on error
+        }
+    }
+
+    /**
+     * Convert audio bytes to float32 array.
+     * Matches desktop conversion: audio_int16.astype(np.float32) / 32768.0
+     */
+    private fun convertBytesToFloat32(audioBytes: ByteArray): FloatArray {
+        val byteBuffer = ByteBuffer.wrap(audioBytes)
+            .order(ByteOrder.LITTLE_ENDIAN) // Ensure little-endian byte order
+
+        val audioFloat32 = FloatArray(audioBytes.size / 2) // 16-bit samples = 2 bytes per sample
+
+        for (i in audioFloat32.indices) {
+            if (byteBuffer.remaining() >= 2) {
+                val int16Sample = byteBuffer.short
+                audioFloat32[i] = int16Sample.toFloat() / 32768.0f // Normalize to [-1.0, 1.0]
+            }
+        }
+
+        return audioFloat32
+    }
+
+    /**
+     * Create ONNX input tensor from float32 audio array
+     * NOTE: Starting with simple single-input approach, may need to add sample rate later
+     */
+    private fun createInputTensor(audioFloat32: FloatArray): OnnxTensor {
+        val ortEnvironment = this.ortEnvironment ?: throw IllegalStateException("ORT environment not initialized")
+
+        // Create audio tensor - trying different shapes to match model expectations
+        // Most ONNX Silero models expect shape [1, audio_length] (batch_size=1)
+        val shape = longArrayOf(1, audioFloat32.size.toLong())
+        val floatBuffer = FloatBuffer.wrap(audioFloat32)
+
+        return OnnxTensor.createTensor(ortEnvironment, floatBuffer, shape)
+    }
+
+    /**
+     * Run inference with audio, sample rate, and state inputs (stateful RNN)
+     */
+    private fun runInference(audioFloat32: FloatArray): Float {
+        val ortSession = this.ortSession ?: throw IllegalStateException("ORT session not initialized")
+
+        // Create all input tensors (audio, sample rate, h0, c0)
+        val inputs = createMultiInputTensors(audioFloat32)
+
+        try {
+            val result = ortSession.run(inputs)
+            try {
+                // Get output tensor (Silero VAD outputs speech probability + updated states)
+                val outputTensor = result.get(0) as OnnxTensor
+                val outputArray = outputTensor.floatBuffer.array()
+
+                // Update state tensor from model output for next inference
+                updateStateTensor(result)
+
+                // Return speech probability
+                return outputArray[0]
+            } finally {
+                // Close the result to free resources
+                result.close()
+            }
+        } finally {
+            // Clean up only the temporary input tensors (not the persistent state tensor)
+            inputs["input"]?.close()
+            inputs["sr"]?.close()
+            // Note: state tensor is persistent and should not be closed here
+        }
+    }
+
+    /**
+     * Update state tensor from model output for next inference
+     */
+    private fun updateStateTensor(result: OrtSession.Result) {
+        try {
+            // The model should output updated state tensor
+            if (result.size() >= 2) {
+                val newStateTensor = result.get(1) as OnnxTensor
+                val newStateShape = newStateTensor.info.shape
+
+                Log.d(TAG, "Model output state shape: [${newStateShape.joinToString(",")}]")
+
+                // Verify the shape is what we expect [2, 1, 128]
+                if (newStateShape.size == 3 &&
+                    newStateShape[0] == 2L &&
+                    newStateShape[1] == 1L &&
+                    newStateShape[2] == 128L) {
+
+                    // Close old state tensor
+                    stateState?.close()
+
+                    // COPY the data instead of just assigning the reference
+                    val ortEnvironment = this.ortEnvironment ?: throw IllegalStateException("ORT environment not initialized")
+                    val stateData = newStateTensor.floatBuffer.array()
+                    val stateBuffer = FloatBuffer.wrap(stateData)
+                    stateState = OnnxTensor.createTensor(ortEnvironment, stateBuffer, newStateShape)
+                    
+                    Log.d(TAG, "State tensor updated successfully")
+                } else {
+                    Log.w(TAG, "Model output state has unexpected shape: [${newStateShape.joinToString(",")}], keeping existing state")
+                }
+            } else {
+                Log.w(TAG, "Model output doesn't contain state tensor (size=${result.size()})")
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not update state tensor from model output: ${e.message}")
+            // Keep using existing state tensor if update fails
+        }
+    }
+
+    /**
+     * Initialize state tensor for stateful RNN (shape [2, 1, 128])
+     */
+    private fun initializeStateTensor() {
+        val ortEnvironment = this.ortEnvironment ?: throw IllegalStateException("ORT environment not initialized")
+
+        // Initialize state tensor as zeros with shape [2, 1, 128]
+        val stateShape = longArrayOf(2, 1, 128)
+        val stateData = FloatArray(2 * 1 * 128) // All zeros
+        val stateBuffer = FloatBuffer.wrap(stateData)
+
+        stateState = OnnxTensor.createTensor(ortEnvironment, stateBuffer, stateShape)
+
+        Log.d(TAG, "State tensor initialized with shape [2, 1, 128]")
+    }
+
+    /**
+     * Create input tensors: audio, state, and sample rate (stateful mode)
+     */
+    private fun createMultiInputTensors(audioFloat32: FloatArray): Map<String, OnnxTensor> {
+        val ortEnvironment = this.ortEnvironment ?: throw IllegalStateException("ORT environment not initialized")
+
+        // Create audio tensor with shape [1, audio_length] (batch_size=1)
+        val audioShape = longArrayOf(1, audioFloat32.size.toLong())
+        val audioBuffer = FloatBuffer.wrap(audioFloat32)
+        val audioTensor = OnnxTensor.createTensor(ortEnvironment, audioBuffer, audioShape)
+
+        Log.d(TAG, "DEBUG: audioFloat32.size=${audioFloat32.size}, audioShape=[${audioShape.joinToString(",")}]")
+
+        // Create sample rate tensor as int64 scalar (no shape dimensions)
+        val sampleRateArray = longArrayOf(sampleRate.toLong())
+        val sampleRateBuffer = java.nio.LongBuffer.wrap(sampleRateArray)
+        val sampleRateTensor = OnnxTensor.createTensor(ortEnvironment, sampleRateBuffer, longArrayOf())
+
+        // Use the persistent state tensor with correct shape [2, 1, 128]
+        val currentState = stateState ?: throw IllegalStateException("State tensor not initialized")
+
+        return mapOf(
+            "input" to audioTensor,
+            "state" to currentState,
+            "sr" to sampleRateTensor
+        )
+    }
+
+    /**
+     * Update VAD settings from the stored config object.
+     * Port of desktop update_settings() method
+     */
+    fun updateSettings(newConfig: AppConfig) {
+        val newThreshold = newConfig.audio.vadThreshold
+        if (newThreshold != vadThreshold) {
+            if (newThreshold in 0.0f..1.0f) {
+                vadThreshold = newThreshold
+                Log.i(TAG, "Updated Silero VAD threshold from config to: $vadThreshold")
+            } else {
+                Log.w(TAG, "Invalid VAD threshold in config ignored: $newThreshold. Must be between 0.0 and 1.0.")
+            }
+        }
+
+        val newSampleRate = newConfig.audio.sampleRate
+        if (newSampleRate != sampleRate) {
+            Log.w(TAG, "Sample rate changed in config to ${newSampleRate}Hz. " +
+                      "SileroVAD requires re-initialization for this change to take effect.")
+            // For simplicity, we don't re-initialize here, but ideally the app should handle this
+            // (matching desktop behavior and comment)
+        }
+
+        config = newConfig
+    }
+
+    /**
+     * Get current frame size in bytes for audio processing
+     */
+    fun getFrameSizeBytes(): Int = frameSizeBytes
+
+    /**
+     * Get current frame duration in milliseconds
+     */
+    fun getFrameDurationMs(): Int = FRAME_DURATION_MS
+
+    /**
+     * Check if VAD is properly initialized
+     */
+    fun isInitialized(): Boolean = initialized
+
+    /**
+     * Clean up resources.
+     * Port of desktop close() method
+     */
+    fun close() {
+        try {
+            // Close state tensor
+            stateState?.close()
+            stateState = null
+
+            ortSession?.close()
+            ortEnvironment?.close()
+            initialized = false
+            Log.d(TAG, "SileroVAD resources cleaned up")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error cleaning up SileroVAD resources: ${e.message}", e)
+        }
+    }
+
+    /**
+     * Clean up resources (called internally on initialization failure)
+     */
+    private fun cleanup() {
+        try {
+            // Close state tensor
+            stateState?.close()
+            stateState = null
+
+            ortSession?.close()
+            ortSession = null
+            ortEnvironment?.close()
+            ortEnvironment = null
+        } catch (e: Exception) {
+            Log.e(TAG, "Error during cleanup: ${e.message}", e)
+        }
+    }
+}
