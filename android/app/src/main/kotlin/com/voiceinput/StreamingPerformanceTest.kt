@@ -170,7 +170,8 @@ class StreamingPerformanceTest(private val context: Context) {
             testResult.chunkCount = testMetrics.chunkCount
             testResult.firstChunkDelayMs = testMetrics.firstChunkTime?.let { it - testResult.startTime }
 
-            logTestResults(testResult)
+            // Calculate comprehensive performance metrics
+            logComprehensiveResults(testResult)
 
         } catch (e: Exception) {
             Log.e(TAG, "Error in streaming test: $testName", e)
@@ -307,6 +308,51 @@ class StreamingPerformanceTest(private val context: Context) {
             Log.w(TAG, "JFK audio not found in assets, will use synthetic audio only")
             null
         }
+    }
+
+    /**
+     * Log comprehensive performance results with UX insights
+     */
+    private fun logComprehensiveResults(result: AudioTestResult) {
+        val performanceRatio = result.totalProcessingTime / (result.audioDurationSec * 1000f)
+        val avgChunkTime = if (result.chunkCount > 0) testMetrics.totalTranscriptionTime / result.chunkCount else 0L
+        val chunksPerSecond = if (result.totalProcessingTime > 0) (result.chunkCount * 1000f) / result.totalProcessingTime else 0f
+
+        Log.i(TAG, """
+            🎯 === STREAMING PERFORMANCE ANALYSIS ===
+
+            📊 AUDIO PROCESSING:
+            • Audio Duration: ${String.format("%.1f", result.audioDurationSec)}s (${result.audioSizeBytes} bytes)
+            • Total Processing Time: ${result.totalProcessingTime}ms
+            • Performance Ratio: ${String.format("%.2f", performanceRatio)}x real-time
+            • ${if (performanceRatio <= 1.0f) "✅ REAL-TIME CAPABLE" else "⚠️ SLOWER THAN REAL-TIME"}
+
+            🚀 STREAMING METRICS:
+            • Total Chunks: ${result.chunkCount}
+            • Chunks/Second: ${String.format("%.1f", chunksPerSecond)}
+            • First Chunk Delay: ${result.firstChunkDelayMs ?: "N/A"}ms
+            • Average Chunk Time: ${avgChunkTime}ms
+            • ${if (result.chunkCount > 10) "✅ CONTINUOUS STREAMING" else "⚠️ LIMITED STREAMING"}
+
+            📝 OUTPUT QUALITY:
+            • Final Text Length: ${result.finalTextLength} characters
+            • Text Preview: "${result.finalText.take(100)}${if (result.finalText.length > 100) "..." else ""}"
+            • ${if (result.finalTextLength > 0) "✅ TRANSCRIPTION SUCCESS" else "❌ NO OUTPUT"}
+
+            🎯 UX ASSESSMENT:
+            ${when {
+                performanceRatio <= 0.5f -> "🟢 EXCELLENT: Ultra-fast, very responsive"
+                performanceRatio <= 1.0f -> "🟢 GOOD: Real-time, responsive experience"
+                performanceRatio <= 2.0f -> "🟡 ACCEPTABLE: Slight delay, still usable"
+                performanceRatio <= 5.0f -> "🟠 POOR: Noticeable lag, frustrating"
+                else -> "🔴 UNUSABLE: Too slow for real-time use"
+            }}
+
+            ${if (result.firstChunkDelayMs != null && result.firstChunkDelayMs!! < 500) "⚡ FAST STARTUP" else "🐌 SLOW STARTUP"}
+            ${if (result.chunkCount > 0 && avgChunkTime < 100) "⚡ SMOOTH STREAMING" else "🔄 CHOPPY STREAMING"}
+
+            === END ANALYSIS ===
+        """.trimIndent())
     }
 
     /**

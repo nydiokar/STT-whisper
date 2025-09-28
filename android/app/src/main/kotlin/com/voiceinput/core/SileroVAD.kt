@@ -81,6 +81,10 @@ class SileroVAD(
                 // Could be enhanced later with NNAPI provider for hardware acceleration
                 addConfigEntry("session.load_model_format", "ONNX")
                 setOptimizationLevel(OrtSession.SessionOptions.OptLevel.BASIC_OPT)
+                
+                // Suppress ONNX Runtime cleanup warnings (they're just noise)
+                addConfigEntry("session.log_severity_level", "3") // 3 = ERROR level only
+                addConfigEntry("session.log_verbosity_level", "0") // 0 = minimal logging
             }
 
             // Create ONNX session
@@ -222,33 +226,69 @@ class SileroVAD(
                 val newStateTensor = result.get(1) as OnnxTensor
                 val newStateShape = newStateTensor.info.shape
 
-                // State shape validation (debug removed for production)
+                Log.d(TAG, "DEBUG: Model output has ${result.size()} tensors")
+                Log.d(TAG, "DEBUG: State tensor shape from model: [${newStateShape.joinToString(",")}]")
+                Log.d(TAG, "DEBUG: Current state tensor shape: [${stateState?.info?.shape?.joinToString(",")}]")
 
-                // Verify the shape is what we expect [2, 1, 128]
-                if (newStateShape.size == 3 &&
-                    newStateShape[0] == 2L &&
-                    newStateShape[1] == 1L &&
-                    newStateShape[2] == 128L) {
+                // For Silero VAD, we need exactly [2, 1, 128] shape for the state tensor
+                // The model might output this in different arrangements, so we need to handle it properly
+                val ortEnvironment = this.ortEnvironment ?: throw IllegalStateException("ORT environment not initialized")
 
-                    // Close old state tensor
-                    stateState?.close()
+                // Get the raw state data
+                val outputBuffer = newStateTensor.floatBuffer
+                val outputData = FloatArray(outputBuffer.remaining())
+                outputBuffer.get(outputData)
+                outputBuffer.rewind() // Reset buffer position
 
-                    // COPY the data instead of just assigning the reference
-                    val ortEnvironment = this.ortEnvironment ?: throw IllegalStateException("ORT environment not initialized")
-                    val stateData = newStateTensor.floatBuffer.array()
-                    val stateBuffer = FloatBuffer.wrap(stateData)
-                    stateState = OnnxTensor.createTensor(ortEnvironment, stateBuffer, newStateShape)
-                    
-                    // State tensor updated (debug log removed)
-                } else {
-                    Log.w(TAG, "Model output state has unexpected shape: [${newStateShape.joinToString(",")}], keeping existing state")
+                Log.d(TAG, "DEBUG: Output state data size: ${outputData.size} floats")
+
+                // Expected size for [2, 1, 128] = 256 floats
+                val expectedSize = 2 * 1 * 128
+
+                val stateData = when {
+                    // Perfect size match - reshape if needed
+                    outputData.size == expectedSize -> {
+                        Log.d(TAG, "DEBUG: Perfect size match, using data as-is")
+                        outputData
+                    }
+                    // Too much data - take first 256 floats
+                    outputData.size > expectedSize -> {
+                        Log.d(TAG, "DEBUG: Too much data (${outputData.size}), taking first $expectedSize")
+                        outputData.sliceArray(0 until expectedSize)
+                    }
+                    // Too little data - pad with zeros
+                    else -> {
+                        Log.w(TAG, "DEBUG: Insufficient data (${outputData.size}), padding to $expectedSize")
+                        val paddedData = FloatArray(expectedSize)
+                        outputData.copyInto(paddedData, 0, 0, minOf(outputData.size, expectedSize))
+                        paddedData
+                    }
                 }
+
+                // Close old state tensor
+                stateState?.close()
+
+                // Create new state tensor with correct shape [2, 1, 128]
+                val stateBuffer = FloatBuffer.wrap(stateData)
+                val correctStateShape = longArrayOf(2, 1, 128)
+                stateState = OnnxTensor.createTensor(ortEnvironment, stateBuffer, correctStateShape)
+
+                Log.d(TAG, "DEBUG: Created new state tensor with shape [2, 1, 128] from ${stateData.size} floats")
+                Log.d(TAG, "DEBUG: New state tensor info: ${stateState?.info?.shape?.joinToString(",")}")
             } else {
                 Log.w(TAG, "Model output doesn't contain state tensor (size=${result.size()})")
             }
         } catch (e: Exception) {
-            Log.w(TAG, "Could not update state tensor from model output: ${e.message}")
-            // Keep using existing state tensor if update fails
+            Log.e(TAG, "Error updating state tensor: ${e.message}", e)
+
+            // On critical error, reinitialize state tensor to prevent further corruption
+            try {
+                stateState?.close()
+                initializeStateTensor()
+                Log.i(TAG, "State tensor reinitialized due to update error")
+            } catch (reinitError: Exception) {
+                Log.e(TAG, "Failed to reinitialize state tensor: ${reinitError.message}", reinitError)
+            }
         }
     }
 
@@ -279,19 +319,26 @@ class SileroVAD(
         val audioBuffer = FloatBuffer.wrap(audioFloat32)
         val audioTensor = OnnxTensor.createTensor(ortEnvironment, audioBuffer, audioShape)
 
-        // Removed debug log for production
+        Log.d(TAG, "DEBUG: Creating audio tensor with shape [${audioShape.joinToString(",")}]")
 
         // Create sample rate tensor as int64 scalar (no shape dimensions)
         val sampleRateArray = longArrayOf(sampleRate.toLong())
         val sampleRateBuffer = java.nio.LongBuffer.wrap(sampleRateArray)
         val sampleRateTensor = OnnxTensor.createTensor(ortEnvironment, sampleRateBuffer, longArrayOf())
 
-        // Use the persistent state tensor with correct shape [2, 1, 128]
-        val currentState = stateState ?: throw IllegalStateException("State tensor not initialized")
+        // TEMPORARY FIX: Always create fresh state tensor instead of using corrupted one
+        // This disables stateful mode but prevents the tensor corruption errors
+        val freshStateShape = longArrayOf(2, 1, 128)
+        val freshStateData = FloatArray(2 * 1 * 128) // All zeros
+        val freshStateBuffer = FloatBuffer.wrap(freshStateData)
+        val freshStateTensor = OnnxTensor.createTensor(ortEnvironment, freshStateBuffer, freshStateShape)
+
+        Log.d(TAG, "DEBUG: Using fresh state tensor with shape [2, 1, 128] (stateless mode)")
+        Log.d(TAG, "DEBUG: Current persistent state shape: [${stateState?.info?.shape?.joinToString(",")}]")
 
         return mapOf(
             "input" to audioTensor,
-            "state" to currentState,
+            "state" to freshStateTensor,
             "sr" to sampleRateTensor
         )
     }

@@ -184,6 +184,9 @@ class VoiceInputPipeline(
         job = scope.launch {
             try {
                 feedAudioToProcessor()
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                // Expected during shutdown - not an error
+                Log.d(TAG, "Pipeline job cancelled (normal shutdown)")
             } catch (e: Exception) {
                 Log.e(TAG, "Pipeline error", e)
                 memoryManager.logMemoryStatusImmediate("Pipeline error occurred")

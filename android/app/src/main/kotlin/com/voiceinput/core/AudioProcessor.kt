@@ -194,12 +194,15 @@ class AudioProcessor(
      * Determine if audio chunk is silent using VAD (matching desktop _is_silent method)
      */
     suspend fun isSilent(audioData: ByteArray): Boolean {
+        Log.d(TAG, "VAD check: audio chunk size = ${audioData.size} bytes")
+
         val vad = sileroVAD
         return if (vad?.isInitialized() == true) {
             vad.isSilent(audioData)
         } else {
             // If VAD failed to init, assume everything is speech to avoid dropping audio
             // (matching desktop behavior)
+            Log.w(TAG, "VAD not initialized, assuming speech")
             false
         }
     }
