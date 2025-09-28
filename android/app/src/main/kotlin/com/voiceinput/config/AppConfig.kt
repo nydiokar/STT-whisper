@@ -20,7 +20,7 @@ data class AudioConfig(
 
     // Voice Activity Detection settings
     val vadMode: String = "silero",
-    val vadThreshold: Float = 0.1f,  // Much more sensitive for testing, 0.0-1.0, higher = less sensitive
+    val vadThreshold: Float = 0.5f,  // Much more sensitive for testing, 0.0-1.0, higher = less sensitive
     val silenceDurationSec: Float = 2.0f,
     val maxChunkDurationSec: Float = 15.0f
 ) {
