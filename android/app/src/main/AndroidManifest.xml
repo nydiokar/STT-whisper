@@ -1,15 +1,28 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- Core audio permissions -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- IME and service permissions (Phase 5 preparation) -->
+    <uses-permission android:name="android.permission.BIND_INPUT_METHOD" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+    <!-- Memory and performance optimization -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <application
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:supportsRtl="true"
-        android:theme="@style/Theme.AppCompat.Light.DarkActionBar">
+        android:theme="@style/Theme.AppCompat.Light.DarkActionBar"
+        android:largeHeap="true"
+        android:hardwareAccelerated="true"
+        android:requestLegacyExternalStorage="false">
 
         <!-- Phase 2 Test: Audio + Transcription -->
         <activity
@@ -30,6 +43,30 @@
         <activity
             android:name=".MainActivity"
             android:exported="false" />
+
+        <!-- Phase 5: IME Service (placeholder for future implementation) -->
+        <!--
+        <service
+            android:name=".ime.VoiceInputIME"
+            android:permission="android.permission.BIND_INPUT_METHOD"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.view.InputMethod" />
+            </intent-filter>
+            <meta-data
+                android:name="android.view.im"
+                android:resource="@xml/method" />
+        </service>
+        -->
+
+        <!-- Phase 5: Background transcription service (placeholder) -->
+        <!--
+        <service
+            android:name=".service.TranscriptionService"
+            android:foregroundServiceType="microphone"
+            android:exported="false" />
+        -->
+
     </application>
 
 </manifest>

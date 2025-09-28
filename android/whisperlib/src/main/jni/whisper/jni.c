@@ -91,7 +91,8 @@ Java_com_whispercppdemo_whisper_WhisperLib_00024Companion_initContextFromInputSt
 
     loader.eof(loader.context);
 
-    context = whisper_init(&loader);
+    struct whisper_context_params cparams = whisper_context_default_params();
+    context = whisper_init_with_params(&loader, cparams);
     return (jlong) context;
 }
 

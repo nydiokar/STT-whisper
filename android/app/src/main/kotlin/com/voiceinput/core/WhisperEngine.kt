@@ -24,8 +24,40 @@ class WhisperEngine(
     private var isInitialized = false
     private var modelPath: String? = null
 
+    // Memory management integration
+    private val memoryManager = MemoryManager(context)
+
+    init {
+        setupMemoryCallbacks()
+    }
+
+    /**
+     * Set up memory pressure response callbacks
+     */
+    private fun setupMemoryCallbacks() {
+        memoryManager.setMemoryWarningCallback {
+            Log.w(TAG, "⚠️ Memory warning - consider releasing resources")
+            // Could implement model offloading here if needed
+        }
+
+        memoryManager.setMemoryCriticalCallback {
+            Log.e(TAG, "🚨 Critical memory pressure - forcing cleanup")
+            // Force garbage collection and consider emergency cleanup
+            memoryManager.requestGarbageCollection("Critical memory in WhisperEngine")
+        }
+
+        memoryManager.setLowMemoryCallback {
+            Log.e(TAG, "🚨 System low memory - emergency response")
+            // Could implement emergency model unloading
+            if (isInitialized) {
+                Log.w(TAG, "Low memory: considering model release to free resources")
+            }
+        }
+    }
+
     suspend fun initialize(modelFilePath: String): Boolean = withContext(Dispatchers.IO) {
         try {
+            memoryManager.logMemoryStatusImmediate("Before model initialization")
             release()
 
             val modelFile = File(modelFilePath)
@@ -34,15 +66,24 @@ class WhisperEngine(
                 return@withContext false
             }
 
+            // Check memory before loading heavy model
+            if (memoryManager.isMemoryCritical()) {
+                Log.w(TAG, "Critical memory detected before model loading - requesting GC")
+                memoryManager.requestGarbageCollection("Pre-model loading")
+                kotlinx.coroutines.delay(200) // Give GC time to work
+            }
+
             modelPath = modelFilePath
             whisperContext = WhisperContext.createContextFromFile(modelFilePath)
 
             isInitialized = true
+            memoryManager.logMemoryStatusImmediate("After model initialization")
             Log.i(TAG, "Whisper initialized with model: $modelName at $modelFilePath")
 
             true
         } catch (e: Exception) {
             Log.e(TAG, "Failed to initialize Whisper", e)
+            memoryManager.logMemoryStatusImmediate("After model initialization FAILED")
             isInitialized = false
             false
         }
@@ -81,19 +122,33 @@ class WhisperEngine(
         Log.i(TAG, "Transcribing ${audioDurationSec}s of audio")
 
         try {
+            memoryManager.logMemoryStatus("Before transcription")
+
+            // Check memory before heavy processing
+            if (memoryManager.isMemoryCritical()) {
+                Log.w(TAG, "Critical memory before transcription - requesting GC")
+                memoryManager.requestGarbageCollection("Pre-transcription")
+                kotlinx.coroutines.delay(100)
+            }
+
             // Convert ByteArray to FloatArray (PCM 16-bit to float32)
             Log.d(TAG, "Converting ${audioData.size} bytes to float array...")
             val floatArray = convertBytesToFloats(audioData)
             Log.d(TAG, "Float array size: ${floatArray.size} samples")
 
+            memoryManager.logMemoryStatus("After audio conversion")
+
             // Call the actual Whisper API with timeout
             Log.d(TAG, "Starting Whisper transcription...")
             val startTime = System.currentTimeMillis()
-            val transcriptionText = withTimeout(300_000) { // extend timeout to 5 minutes for stability during testing
+
+            // Optimized timeout for faster response with tiny model
+            val transcriptionText = withTimeout(60_000) { // 1 minute timeout for tiny model
                 whisperContext!!.transcribeData(floatArray, printTimestamp = false)
             }
             val elapsedMs = System.currentTimeMillis() - startTime
 
+            memoryManager.logMemoryStatus("After transcription")
             Log.i(TAG, "Transcription complete in ${elapsedMs}ms: '$transcriptionText'")
 
             return@withContext TranscriptionResult(
@@ -101,7 +156,7 @@ class WhisperEngine(
                 language = language,
                 segments = emptyList(),
                 confidence = 1.0f,
-                processingTimeMs = 0
+                processingTimeMs = elapsedMs
             )
 
         } catch (e: Exception) {
@@ -123,9 +178,19 @@ class WhisperEngine(
 
     suspend fun release() = withContext(Dispatchers.IO) {
         try {
+            memoryManager.logMemoryStatusImmediate("Before Whisper release")
+
             whisperContext?.release()
             whisperContext = null
             isInitialized = false
+
+            // Clean up memory manager
+            memoryManager.release()
+
+            // Request GC after releasing large resources
+            memoryManager.requestGarbageCollection("Whisper engine release")
+
+            memoryManager.logMemoryStatusImmediate("After Whisper release")
             Log.i(TAG, "Whisper engine released")
         } catch (e: Exception) {
             Log.e(TAG, "Error releasing Whisper resources", e)

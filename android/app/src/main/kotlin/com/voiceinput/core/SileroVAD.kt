@@ -131,8 +131,10 @@ class SileroVAD(
             // Apply threshold from config (matching desktop logic)
             val isSpeech = speechProb >= vadThreshold
 
-            // Log sparingly for performance (matching desktop approach)
-            Log.d(TAG, "VAD Result: Speech Prob=${"%.3f".format(speechProb)}, Threshold=$vadThreshold, IsSpeech=$isSpeech")
+            // Log only when speech detection changes state (reduce log spam)
+            if (isSpeech) {
+                Log.d(TAG, "🎤 Speech detected: prob=${"%.3f".format(speechProb)}")
+            }
 
             return@withContext !isSpeech // Return true if silent (i.e., not speech)
 
@@ -220,7 +222,7 @@ class SileroVAD(
                 val newStateTensor = result.get(1) as OnnxTensor
                 val newStateShape = newStateTensor.info.shape
 
-                Log.d(TAG, "Model output state shape: [${newStateShape.joinToString(",")}]")
+                // State shape validation (debug removed for production)
 
                 // Verify the shape is what we expect [2, 1, 128]
                 if (newStateShape.size == 3 &&
@@ -237,7 +239,7 @@ class SileroVAD(
                     val stateBuffer = FloatBuffer.wrap(stateData)
                     stateState = OnnxTensor.createTensor(ortEnvironment, stateBuffer, newStateShape)
                     
-                    Log.d(TAG, "State tensor updated successfully")
+                    // State tensor updated (debug log removed)
                 } else {
                     Log.w(TAG, "Model output state has unexpected shape: [${newStateShape.joinToString(",")}], keeping existing state")
                 }
@@ -277,7 +279,7 @@ class SileroVAD(
         val audioBuffer = FloatBuffer.wrap(audioFloat32)
         val audioTensor = OnnxTensor.createTensor(ortEnvironment, audioBuffer, audioShape)
 
-        Log.d(TAG, "DEBUG: audioFloat32.size=${audioFloat32.size}, audioShape=[${audioShape.joinToString(",")}]")
+        // Removed debug log for production
 
         // Create sample rate tensor as int64 scalar (no shape dimensions)
         val sampleRateArray = longArrayOf(sampleRate.toLong())
