@@ -135,6 +135,9 @@ class SileroVAD(
             // Apply threshold from config (matching desktop logic)
             val isSpeech = speechProb >= vadThreshold
 
+            // Log speech probability for debugging (temporary)
+            Log.d(TAG, "VAD prob=${"%.3f".format(speechProb)}, threshold=$vadThreshold, isSpeech=$isSpeech")
+
             // Log only when speech detection changes state (reduce log spam)
             if (isSpeech) {
                 Log.d(TAG, "🎤 Speech detected: prob=${"%.3f".format(speechProb)}")
@@ -226,9 +229,6 @@ class SileroVAD(
                 val newStateTensor = result.get(1) as OnnxTensor
                 val newStateShape = newStateTensor.info.shape
 
-                Log.d(TAG, "DEBUG: Model output has ${result.size()} tensors")
-                Log.d(TAG, "DEBUG: State tensor shape from model: [${newStateShape.joinToString(",")}]")
-                Log.d(TAG, "DEBUG: Current state tensor shape: [${stateState?.info?.shape?.joinToString(",")}]")
 
                 // For Silero VAD, we need exactly [2, 1, 128] shape for the state tensor
                 // The model might output this in different arrangements, so we need to handle it properly
@@ -240,25 +240,21 @@ class SileroVAD(
                 outputBuffer.get(outputData)
                 outputBuffer.rewind() // Reset buffer position
 
-                Log.d(TAG, "DEBUG: Output state data size: ${outputData.size} floats")
-
                 // Expected size for [2, 1, 128] = 256 floats
                 val expectedSize = 2 * 1 * 128
 
                 val stateData = when {
                     // Perfect size match - reshape if needed
                     outputData.size == expectedSize -> {
-                        Log.d(TAG, "DEBUG: Perfect size match, using data as-is")
                         outputData
                     }
                     // Too much data - take first 256 floats
                     outputData.size > expectedSize -> {
-                        Log.d(TAG, "DEBUG: Too much data (${outputData.size}), taking first $expectedSize")
                         outputData.sliceArray(0 until expectedSize)
                     }
                     // Too little data - pad with zeros
                     else -> {
-                        Log.w(TAG, "DEBUG: Insufficient data (${outputData.size}), padding to $expectedSize")
+                        Log.w(TAG, "Insufficient state data (${outputData.size}), padding to $expectedSize")
                         val paddedData = FloatArray(expectedSize)
                         outputData.copyInto(paddedData, 0, 0, minOf(outputData.size, expectedSize))
                         paddedData
@@ -273,8 +269,7 @@ class SileroVAD(
                 val correctStateShape = longArrayOf(2, 1, 128)
                 stateState = OnnxTensor.createTensor(ortEnvironment, stateBuffer, correctStateShape)
 
-                Log.d(TAG, "DEBUG: Created new state tensor with shape [2, 1, 128] from ${stateData.size} floats")
-                Log.d(TAG, "DEBUG: New state tensor info: ${stateState?.info?.shape?.joinToString(",")}")
+                // State tensor updated successfully
             } else {
                 Log.w(TAG, "Model output doesn't contain state tensor (size=${result.size()})")
             }
@@ -319,26 +314,33 @@ class SileroVAD(
         val audioBuffer = FloatBuffer.wrap(audioFloat32)
         val audioTensor = OnnxTensor.createTensor(ortEnvironment, audioBuffer, audioShape)
 
-        Log.d(TAG, "DEBUG: Creating audio tensor with shape [${audioShape.joinToString(",")}]")
+        Log.d(TAG, "Creating audio tensor with shape [${audioShape.joinToString(",")}]")
 
         // Create sample rate tensor as int64 scalar (no shape dimensions)
         val sampleRateArray = longArrayOf(sampleRate.toLong())
         val sampleRateBuffer = java.nio.LongBuffer.wrap(sampleRateArray)
         val sampleRateTensor = OnnxTensor.createTensor(ortEnvironment, sampleRateBuffer, longArrayOf())
 
-        // TEMPORARY FIX: Always create fresh state tensor instead of using corrupted one
-        // This disables stateful mode but prevents the tensor corruption errors
-        val freshStateShape = longArrayOf(2, 1, 128)
-        val freshStateData = FloatArray(2 * 1 * 128) // All zeros
-        val freshStateBuffer = FloatBuffer.wrap(freshStateData)
-        val freshStateTensor = OnnxTensor.createTensor(ortEnvironment, freshStateBuffer, freshStateShape)
+        // Ensure we have a valid persistent state tensor [2, 1, 128]
+        val expectedStateShape = longArrayOf(2, 1, 128)
+        val currentStateShape = stateState?.info?.shape
+        val stateIsValid = currentStateShape != null &&
+                currentStateShape.size == expectedStateShape.size &&
+                currentStateShape.zip(expectedStateShape).all { (a, b) -> a == b }
 
-        Log.d(TAG, "DEBUG: Using fresh state tensor with shape [2, 1, 128] (stateless mode)")
-        Log.d(TAG, "DEBUG: Current persistent state shape: [${stateState?.info?.shape?.joinToString(",")}]")
+        if (!stateIsValid) {
+            Log.w(TAG, "DEBUG: Persistent state tensor missing or wrong shape: [${currentStateShape?.joinToString(",")}] → reinitializing")
+            initializeStateTensor()
+        }
+
+        // Use the persistent state tensor for stateful operation
+        val stateTensor = stateState
+
+        Log.d(TAG, "Using persistent state tensor (stateful mode)")
 
         return mapOf(
             "input" to audioTensor,
-            "state" to freshStateTensor,
+            "state" to requireNotNull(stateTensor) { "State tensor should be initialized" },
             "sr" to sampleRateTensor
         )
     }

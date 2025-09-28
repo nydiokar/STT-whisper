@@ -311,3 +311,5 @@
 **Note**: Phase 3 (VAD Integration) is complete and validated! VAD proven working with real speech detection.
 
 **Memory Monitoring**: Add basic memory logging as you develop (not full optimization)
+
+NOTES: SYNTHETIC SPEECH HAS TOO LOW PROBABILITY - sub 0.1

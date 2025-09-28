@@ -143,7 +143,7 @@ class WhisperEngine(
             val startTime = System.currentTimeMillis()
 
             // Optimized timeout for faster response with tiny model
-            val transcriptionText = withTimeout(60_000) { // 1 minute timeout for tiny model
+            val transcriptionText = withTimeout(120_000) { // 2 minute timeout for streaming tests
                 whisperContext!!.transcribeData(floatArray, printTimestamp = false)
             }
             val elapsedMs = System.currentTimeMillis() - startTime

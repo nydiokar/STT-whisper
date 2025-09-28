@@ -138,6 +138,7 @@ class StreamingPerformanceTest(private val context: Context) {
 
     /**
      * Core streaming test with provided audio data
+     * This now uses the FULL PIPELINE with JFK audio instead of microphone
      */
     private suspend fun testStreamingWithAudio(testName: String, audioData: ByteArray): AudioTestResult {
         val testResult = AudioTestResult(testName)
@@ -151,11 +152,11 @@ class StreamingPerformanceTest(private val context: Context) {
             // Reset metrics for this test
             testMetrics.reset()
 
-            // Start pipeline
+            // Start the regular pipeline
             voicePipeline!!.startListening()
 
-            // Feed audio in chunks to simulate real-time streaming
-            feedAudioInChunks(audioData, testResult)
+            // Feed JFK audio through the pipeline's AudioProcessor directly
+            feedAudioThroughPipeline(audioData)
 
             // Stop pipeline and get final text
             val finalText = voicePipeline!!.stopListening()
@@ -182,13 +183,15 @@ class StreamingPerformanceTest(private val context: Context) {
     }
 
     /**
-     * Feed audio data in realistic chunks to simulate real-time streaming
+     * Feed audio data through the pipeline's AudioProcessor
+     * This uses the full pipeline flow: AudioProcessor → VAD → Whisper → TextProcessor
      */
-    private suspend fun feedAudioInChunks(audioData: ByteArray, testResult: AudioTestResult) {
-        val chunkSize = SAMPLE_RATE * 2 / 10 // 100ms chunks
+    private suspend fun feedAudioThroughPipeline(audioData: ByteArray) {
+        val chunkSize = 1024 // Match AudioRecorder chunk size to avoid VAD tensor corruption
         val chunks = audioData.toList().chunked(chunkSize)
 
-        Log.i(TAG, "📤 Feeding ${chunks.size} audio chunks (${chunkSize} bytes each)...")
+        Log.i(TAG, "📤 Feeding ${chunks.size} audio chunks through full pipeline...")
+        Log.i(TAG, "📊 Using 1024-byte chunks to match microphone (AudioRecorder) chunk size")
 
         for ((index, chunk) in chunks.withIndex()) {
             val chunkBytes = chunk.toByteArray()
@@ -196,22 +199,60 @@ class StreamingPerformanceTest(private val context: Context) {
             // Simulate real-time by adding small delay
             delay(100) // 100ms delay to simulate real-time audio
 
-            // Feed chunk to pipeline (through AudioProcessor)
+            // Feed chunk directly to AudioProcessor (which handles VAD and transcription)
+            // This goes through the full pipeline: AudioProcessor → VAD → Whisper → TextProcessor
             voicePipeline?.let { pipeline ->
-                // We need to access the audio processor to feed data
-                // For now, let's just transcribe chunks directly for testing
-                if (chunk.size >= 1600) { // Minimum chunk size
-                    val result = whisperEngine!!.transcribe(chunkBytes)
-                    handleStreamingResult(result)
-                }
+                // Get the AudioProcessor and feed audio directly
+                val audioProcessor = pipeline.getAudioProcessor()
+                audioProcessor.addAudio(chunkBytes)
             }
 
             if (index % 10 == 0) {
-                Log.d(TAG, "Fed chunk ${index + 1}/${chunks.size}")
+                Log.d(TAG, "Fed chunk ${index + 1}/${chunks.size} through pipeline")
             }
         }
 
-        Log.i(TAG, "✅ Finished feeding audio chunks")
+        Log.i(TAG, "✅ Finished feeding audio chunks through pipeline")
+    }
+
+    /**
+     * Feed audio data in realistic chunks to simulate real-time streaming
+     * This method is now DEPRECATED - we use the full pipeline instead
+     */
+    private suspend fun feedAudioInChunks(audioData: ByteArray, testResult: AudioTestResult) {
+        val chunkSize = SAMPLE_RATE * 2 / 10 // 100ms chunks (3200 bytes)
+        val chunks = audioData.toList().chunked(chunkSize)
+
+        val expectedChunks = (audioData.size / chunkSize.toFloat()).toInt()
+        Log.i(TAG, "📤 Feeding ${chunks.size} audio chunks (${chunkSize} bytes each) through VAD...")
+        Log.i(TAG, "📊 Audio duration: ${testResult.audioDurationSec}s, Expected chunks: $expectedChunks")
+
+        for ((index, chunk) in chunks.withIndex()) {
+            val chunkBytes = chunk.toByteArray()
+
+            // Simulate real-time by adding small delay
+            delay(100) // 100ms delay to simulate real-time audio
+
+            // Feed chunk through VAD using the same method as VAD SYSTEM TEST
+            val isSilent = voicePipeline?.testVAD(chunkBytes) ?: true
+            
+            if (!isSilent) {
+                Log.d(TAG, "🎤 Speech detected in chunk ${index + 1}")
+                // Process through Whisper for transcription
+                if (chunkBytes.size >= 1600) { // Minimum chunk size
+                    val result = whisperEngine!!.transcribe(chunkBytes)
+                    handleStreamingResult(result)
+                }
+            } else {
+                Log.d(TAG, "VAD=Silence in chunk ${index + 1}")
+            }
+
+            if (index % 10 == 0) {
+                Log.d(TAG, "Processed chunk ${index + 1}/${chunks.size} through VAD")
+            }
+        }
+
+        Log.i(TAG, "✅ Finished feeding audio chunks through VAD")
     }
 
     /**
@@ -297,15 +338,16 @@ class StreamingPerformanceTest(private val context: Context) {
      */
     private fun loadJFKAudio(): ByteArray? {
         return try {
+            Log.i(TAG, "🔍 Attempting to load JFK audio from assets...")
             // Try to load from assets if available
-            val inputStream: InputStream = context.assets.open("audio/jfk_test.wav")
+            val inputStream: InputStream = context.assets.open("jfk.wav")
             val audioData = inputStream.readBytes()
             inputStream.close()
 
             Log.i(TAG, "✅ Loaded JFK audio: ${audioData.size} bytes")
             audioData
         } catch (e: Exception) {
-            Log.w(TAG, "JFK audio not found in assets, will use synthetic audio only")
+            Log.w(TAG, "❌ JFK audio not found in assets: ${e.message}")
             null
         }
     }

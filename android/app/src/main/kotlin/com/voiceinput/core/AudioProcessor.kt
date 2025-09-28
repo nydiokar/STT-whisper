@@ -40,9 +40,7 @@ class AudioProcessor(
     private var sampleRate: Int = config.audio.sampleRate
     private var silenceDurationSec: Float = config.audio.silenceDurationSec
 
-    // Streaming optimization: match desktop behavior more closely
-    private var streamingChunkDurationSec: Float = 2.0f // 2 second chunks for balanced speed/accuracy
-    private var streamingChunkBytes: Int = 0
+    // Removed streaming chunk logic - now matches desktop behavior exactly
     private var maxChunkDurationSec: Float = config.audio.maxChunkDurationSec
     private var maxChunkBytes: Int = 0
     private var minChunkSizeBytes: Int = config.transcription.minChunkSizeBytes
@@ -116,10 +114,7 @@ class AudioProcessor(
         maxChunkBytes = (maxChunkDurationSec * sampleRate * 2).toInt()
         minChunkSizeBytes = config.transcription.minChunkSizeBytes
 
-        // Streaming optimization: calculate streaming chunk size
-        streamingChunkBytes = (streamingChunkDurationSec * sampleRate * 2).toInt()
-
-        Log.i(TAG, "🔧 Config updated: SilenceDur=${silenceDurationSec}s, StreamingChunk=${streamingChunkDurationSec}s (${streamingChunkBytes} bytes), MaxChunk=${maxChunkDurationSec}s")
+        Log.i(TAG, "🔧 Config updated: SilenceDur=${silenceDurationSec}s, MaxChunk=${maxChunkDurationSec}s (${maxChunkBytes} bytes)")
     }
 
     /**
@@ -276,13 +271,8 @@ class AudioProcessor(
                 // Speech detected - use streaming optimization
                 val newState = currentState.withSpeechAdded(audioChunk)
 
-                // Streaming processing: process at streaming chunk intervals
-                if (newState.activeSpeechBuffer.size >= streamingChunkBytes) {
-                    Log.i(TAG, "🚀 Streaming: Processing chunk at ${streamingChunkDurationSec}s interval (${newState.activeSpeechBuffer.size} bytes)")
-                    processAudioBuffer(newState.activeSpeechBuffer)
-                    newState.cleared()
-                } else if (newState.activeSpeechBuffer.size >= maxChunkBytes) {
-                    // Fallback: process if buffer exceeds absolute max
+                // Process if buffer exceeds max duration/size (matching desktop logic)
+                if (newState.activeSpeechBuffer.size >= maxChunkBytes) {
                     Log.i(TAG, "Processing chunk due to max size reached (${newState.activeSpeechBuffer.size} bytes)")
                     processAudioBuffer(newState.activeSpeechBuffer)
                     newState.cleared()
@@ -301,12 +291,8 @@ class AudioProcessor(
                     // Buffer some silence if speech just ended (helps context)
                     val newState = currentState.withSilenceAdded(audioChunk)
 
-                    // Check streaming chunk size even during silence
-                    if (newState.activeSpeechBuffer.size >= streamingChunkBytes) {
-                        Log.i(TAG, "🚀 Streaming: Processing mixed speech/silence chunk (${newState.activeSpeechBuffer.size} bytes)")
-                        processAudioBuffer(newState.activeSpeechBuffer)
-                        newState.cleared()
-                    } else if (newState.activeSpeechBuffer.size >= maxChunkBytes) {
+                    // Process if silence makes buffer exceed max size (matching desktop logic)
+                    if (newState.activeSpeechBuffer.size >= maxChunkBytes) {
                         Log.i(TAG, "Processing chunk due to max size reached during silence (${newState.activeSpeechBuffer.size} bytes)")
                         processAudioBuffer(newState.activeSpeechBuffer)
                         newState.cleared()
@@ -388,10 +374,6 @@ class AudioProcessor(
      * Get current processing status
      */
     fun isRunning(): Boolean = isRunning.get()
-
-    /**
-     * Clean up resources (matching desktop close method)
-     */
     suspend fun close() {
         stop() // Signal the processor to stop
         sileroVAD?.close() // Clean up VAD resources

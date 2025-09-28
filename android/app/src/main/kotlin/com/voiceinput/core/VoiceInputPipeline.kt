@@ -305,6 +305,13 @@ class VoiceInputPipeline(
     }
 
     /**
+     * Get AudioProcessor for testing purposes
+     */
+    fun getAudioProcessor(): AudioProcessor {
+        return audioProcessor
+    }
+
+    /**
      * Release all resources with comprehensive cleanup
      */
     suspend fun release() {

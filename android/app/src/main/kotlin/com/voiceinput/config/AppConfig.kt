@@ -20,9 +20,9 @@ data class AudioConfig(
 
     // Voice Activity Detection settings
     val vadMode: String = "silero",
-    val vadThreshold: Float = 0.5f,  // Much more sensitive for testing, 0.0-1.0, higher = less sensitive
+    val vadThreshold: Float = 0.3f,  // Reasonable threshold for real speech
     val silenceDurationSec: Float = 2.0f,
-    val maxChunkDurationSec: Float = 15.0f
+    val maxChunkDurationSec: Float = 3.0f  // Reduced from 15s to 3s for better streaming
 ) {
     init {
         require(sampleRate in VALID_SAMPLE_RATES) {
