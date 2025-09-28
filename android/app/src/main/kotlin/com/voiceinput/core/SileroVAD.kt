@@ -135,10 +135,7 @@ class SileroVAD(
             // Apply threshold from config (matching desktop logic)
             val isSpeech = speechProb >= vadThreshold
 
-            // Log speech probability for debugging (temporary)
-            Log.d(TAG, "VAD prob=${"%.3f".format(speechProb)}, threshold=$vadThreshold, isSpeech=$isSpeech")
-
-            // Log only when speech detection changes state (reduce log spam)
+            // Only log speech detection (reduce log spam)
             if (isSpeech) {
                 Log.d(TAG, "🎤 Speech detected: prob=${"%.3f".format(speechProb)}")
             }
@@ -146,7 +143,19 @@ class SileroVAD(
             return@withContext !isSpeech // Return true if silent (i.e., not speech)
 
         } catch (e: Exception) {
-            Log.e(TAG, "Error during Silero VAD processing: ${e.message}", e)
+            Log.e(TAG, "Error during Silero VAD processing: ${e.message}")
+            
+            // On tensor shape errors, reinitialize state to prevent corruption
+            if (e.message?.contains("dimensions") == true || e.message?.contains("shape") == true) {
+                Log.w(TAG, "Tensor shape error detected - reinitializing state tensor")
+                try {
+                    stateState?.close()
+                    initializeStateTensor()
+                } catch (reinitError: Exception) {
+                    Log.e(TAG, "Failed to reinitialize state tensor: ${reinitError.message}")
+                }
+            }
+            
             return@withContext false // Fail safe: assume not silent on error
         }
     }
@@ -300,7 +309,7 @@ class SileroVAD(
 
         stateState = OnnxTensor.createTensor(ortEnvironment, stateBuffer, stateShape)
 
-        Log.d(TAG, "State tensor initialized with shape [2, 1, 128]")
+        // State tensor initialized with shape [2, 1, 128]
     }
 
     /**
@@ -313,8 +322,6 @@ class SileroVAD(
         val audioShape = longArrayOf(1, audioFloat32.size.toLong())
         val audioBuffer = FloatBuffer.wrap(audioFloat32)
         val audioTensor = OnnxTensor.createTensor(ortEnvironment, audioBuffer, audioShape)
-
-        Log.d(TAG, "Creating audio tensor with shape [${audioShape.joinToString(",")}]")
 
         // Create sample rate tensor as int64 scalar (no shape dimensions)
         val sampleRateArray = longArrayOf(sampleRate.toLong())
@@ -336,7 +343,7 @@ class SileroVAD(
         // Use the persistent state tensor for stateful operation
         val stateTensor = stateState
 
-        Log.d(TAG, "Using persistent state tensor (stateful mode)")
+        // Using persistent state tensor (stateful mode)
 
         return mapOf(
             "input" to audioTensor,

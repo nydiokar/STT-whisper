@@ -22,7 +22,7 @@ data class AudioConfig(
     val vadMode: String = "silero",
     val vadThreshold: Float = 0.3f,  // Reasonable threshold for real speech
     val silenceDurationSec: Float = 2.0f,
-    val maxChunkDurationSec: Float = 3.0f  // Reduced from 15s to 3s for better streaming
+    val maxChunkDurationSec: Float = 1.0f  // Reduced to 1s for mobile performance (was 3s)
 ) {
     init {
         require(sampleRate in VALID_SAMPLE_RATES) {
@@ -46,7 +46,7 @@ data class AudioConfig(
  * Port of desktop/voice_input_service/config.py TranscriptionConfig
  */
 data class TranscriptionConfig(
-    val modelName: String = "base",
+    val modelName: String = "base.en-q5_1",  // Quantized base model - faster!
     val language: String = "en",
     val translate: Boolean = false,
     val minChunkSizeBytes: Int = 32000, // ~1 sec @ 16kHz

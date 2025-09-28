@@ -187,18 +187,36 @@ class AudioProcessor(
 
     /**
      * Determine if audio chunk is silent using VAD (matching desktop _is_silent method)
+     * Handles large chunks by splitting them into VAD-compatible frames
      */
     suspend fun isSilent(audioData: ByteArray): Boolean {
-        Log.d(TAG, "VAD check: audio chunk size = ${audioData.size} bytes")
-
         val vad = sileroVAD
-        return if (vad?.isInitialized() == true) {
+        if (vad?.isInitialized() != true) {
+            Log.w(TAG, "VAD not initialized, assuming speech")
+            return false
+        }
+
+        // VAD expects ~30ms frames (480 samples at 16kHz = 960 bytes)
+        val vadFrameSize = vad.getFrameSizeBytes()
+        
+        return if (audioData.size <= vadFrameSize) {
+            // Small chunk - process directly
             vad.isSilent(audioData)
         } else {
-            // If VAD failed to init, assume everything is speech to avoid dropping audio
-            // (matching desktop behavior)
-            Log.w(TAG, "VAD not initialized, assuming speech")
-            false
+            // Large chunk - split into VAD frames and process each
+            val frames = audioData.toList().chunked(vadFrameSize)
+            var hasSpeech = false
+            
+            for (frame in frames) {
+                val frameBytes = frame.toByteArray()
+                val isFrameSilent = vad.isSilent(frameBytes)
+                if (!isFrameSilent) {
+                    hasSpeech = true
+                    break // Early exit on first speech detection
+                }
+            }
+            
+            !hasSpeech // Return true if silent (i.e., not speech)
         }
     }
 
@@ -261,11 +279,10 @@ class AudioProcessor(
             val currentTime = System.currentTimeMillis()
             val timeSinceLastSpeech = (currentTime - currentState.lastSpeechTime) / 1000.0
 
-            Log.d(TAG, if (isChunkSilent) {
-                "VAD=Silence. Time since speech: ${"%.2f".format(timeSinceLastSpeech)}s. Buffer: ${currentState.activeSpeechBuffer.size} bytes"
-            } else {
-                "VAD=Speech. Added ${audioChunk.size} bytes. Buffer: ${currentState.activeSpeechBuffer.size + audioChunk.size} bytes"
-            })
+            // Only log significant state changes (reduce log spam)
+            if (!isChunkSilent) {
+                Log.d(TAG, "🎤 Speech detected: ${audioChunk.size} bytes → Buffer: ${currentState.activeSpeechBuffer.size + audioChunk.size} bytes")
+            }
 
             return if (!isChunkSilent) {
                 // Speech detected - use streaming optimization
@@ -273,7 +290,7 @@ class AudioProcessor(
 
                 // Process if buffer exceeds max duration/size (matching desktop logic)
                 if (newState.activeSpeechBuffer.size >= maxChunkBytes) {
-                    Log.i(TAG, "Processing chunk due to max size reached (${newState.activeSpeechBuffer.size} bytes)")
+                    Log.i(TAG, "📤 Processing chunk: ${newState.activeSpeechBuffer.size} bytes (max size reached)")
                     processAudioBuffer(newState.activeSpeechBuffer)
                     newState.cleared()
                 } else {
@@ -284,7 +301,7 @@ class AudioProcessor(
                 if (currentState.activeSpeechBuffer.size >= minAudioLengthBytes &&
                     timeSinceLastSpeech >= silenceDurationSec) {
                     // Process buffer due to silence after speech
-                    Log.i(TAG, "Processing chunk due to silence detected after speech (${currentState.activeSpeechBuffer.size} bytes)")
+                    Log.i(TAG, "📤 Processing chunk: ${currentState.activeSpeechBuffer.size} bytes (silence after speech)")
                     processAudioBuffer(currentState.activeSpeechBuffer)
                     currentState.cleared()
                 } else if (currentState.activeSpeechBuffer.isNotEmpty()) {
@@ -293,7 +310,7 @@ class AudioProcessor(
 
                     // Process if silence makes buffer exceed max size (matching desktop logic)
                     if (newState.activeSpeechBuffer.size >= maxChunkBytes) {
-                        Log.i(TAG, "Processing chunk due to max size reached during silence (${newState.activeSpeechBuffer.size} bytes)")
+                        Log.i(TAG, "📤 Processing chunk: ${newState.activeSpeechBuffer.size} bytes (max size during silence)")
                         processAudioBuffer(newState.activeSpeechBuffer)
                         newState.cleared()
                     } else {

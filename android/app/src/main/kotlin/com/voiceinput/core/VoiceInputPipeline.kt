@@ -252,6 +252,79 @@ class VoiceInputPipeline(
     }
 
     /**
+     * Feed file audio through the pipeline for real-time transcription
+     * This allows the pipeline to process pre-recorded audio files with the same
+     * VAD and streaming capabilities as live microphone input
+     * 
+     * @param audioData Raw audio data from file
+     * @param chunkSizeBytes Size of chunks to feed (default: 1024 to match microphone)
+     * @param delayMs Delay between chunks to simulate real-time (default: 100ms)
+     */
+    suspend fun feedFileAudio(
+        audioData: ByteArray, 
+        chunkSizeBytes: Int = 8000, // 0.25 seconds at 16kHz (more reasonable for mobile)
+        delayMs: Long = 250L // 250ms delay to simulate real-time
+    ) {
+        if (isRunning) {
+            Log.w(TAG, "Pipeline already running - cannot feed file audio")
+            return
+        }
+
+        Log.i(TAG, "🎬 Starting file audio streaming: ${audioData.size} bytes in ${chunkSizeBytes}-byte chunks")
+        
+        // Reset state for file processing
+        isRunning = true
+        accumulatedText = ""
+        transcriptionCount = 0
+        totalProcessingTime = 0L
+
+        // Start AudioProcessor (but not AudioRecorder)
+        if (!audioProcessor.start()) {
+            Log.e(TAG, "Failed to start audio processor for file input")
+            isRunning = false
+            return
+        }
+
+        memoryManager.logMemoryStatus("After audio processor start for file input")
+
+        try {
+            // Split audio data into chunks
+            val chunks = audioData.toList().chunked(chunkSizeBytes)
+            Log.i(TAG, "📤 Feeding ${chunks.size} audio chunks through pipeline (${chunkSizeBytes}-byte chunks)...")
+
+            // Feed chunks through the pipeline with real-time simulation
+            for ((index, chunk) in chunks.withIndex()) {
+                val chunkBytes = chunk.toByteArray()
+
+                // Simulate real-time by adding delay
+                delay(delayMs)
+
+                // Feed chunk directly to AudioProcessor (same as microphone input)
+                audioProcessor.addAudio(chunkBytes)
+
+                if (index % 10 == 0) {
+                    Log.d(TAG, "Fed chunk ${index + 1}/${chunks.size} through pipeline")
+                }
+            }
+
+            Log.i(TAG, "✅ Finished feeding file audio chunks through pipeline")
+            
+            // Wait a bit for final processing
+            delay(1000)
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "Error during file audio processing", e)
+        } finally {
+            // Stop AudioProcessor
+            audioProcessor.stop()
+            isRunning = false
+            
+            Log.i(TAG, "🏁 File audio streaming completed. Final text: ${accumulatedText.length} chars")
+            memoryManager.logMemoryStatus("After file audio processing complete")
+        }
+    }
+
+    /**
      * Clear accumulated text
      */
     fun clearText() {

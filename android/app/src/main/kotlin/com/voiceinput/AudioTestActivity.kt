@@ -36,6 +36,7 @@ class AudioTestActivity : AppCompatActivity() {
     private lateinit var testPipelineButton: Button
     private lateinit var testVADButton: Button
     private lateinit var testStreamingButton: Button
+    private lateinit var liveJFKButton: Button
 
     private lateinit var audioRecorder: AudioRecorder
     private lateinit var whisperEngine: WhisperEngine
@@ -109,6 +110,14 @@ class AudioTestActivity : AppCompatActivity() {
         }
         layout.addView(testStreamingButton)
 
+        // Live JFK Demo button
+        liveJFKButton = Button(this).apply {
+            text = "🎬 Live JFK Demo"
+            isEnabled = false
+            setOnClickListener { testLiveJFKDemo() }
+        }
+        layout.addView(liveJFKButton)
+
         // Transcription output
         layout.addView(TextView(this).apply {
             text = "Transcription Output:"
@@ -141,8 +150,10 @@ class AudioTestActivity : AppCompatActivity() {
                 2. Manual test: Click 'Start Recording' for 5-second test
                 3. VAD test: Click 'Test VAD Pipeline' for continuous detection
                 4. Synthetic test: Click 'Test VAD with Synthetic Audio' (no speaking required)
-                5. VAD will automatically detect speech and process it
-                6. Speak clearly and watch for automatic transcription
+                5. Performance test: Click 'Test Streaming Performance' for comprehensive analysis
+                6. Live Demo: Click 'Live JFK Demo' to see real-time file transcription
+                7. VAD will automatically detect speech and process it
+                8. Speak clearly and watch for automatic transcription
 
                 If VAD detects speech and transcribes correctly, Phase 3 is complete!
             """.trimIndent()
@@ -240,6 +251,7 @@ class AudioTestActivity : AppCompatActivity() {
         testPipelineButton.isEnabled = true
         testVADButton.isEnabled = true
         testStreamingButton.isEnabled = true
+        liveJFKButton.isEnabled = true
         updateStatus("✅ Ready to test - Click a button to start")
     }
 
@@ -703,6 +715,81 @@ class AudioTestActivity : AppCompatActivity() {
             } finally {
                 testStreamingButton.isEnabled = true
             }
+        }
+    }
+
+    /**
+     * Test Live JFK Demo - Stream JFK audio through pipeline with real-time transcription
+     */
+    private fun testLiveJFKDemo() {
+        lifecycleScope.launch {
+            try {
+                updateStatus("🎬 Starting Live JFK Demo...")
+                liveJFKButton.isEnabled = false
+                transcriptionText.text = "🎬 Loading JFK audio file...\n\n"
+
+                // Load JFK audio from assets
+                val jfkAudioData = loadJFKAudioFromAssets()
+                if (jfkAudioData == null) {
+                    transcriptionText.text = "❌ JFK audio file not found in assets\n\nPlease ensure 'jfk.wav' is in the assets folder"
+                    updateStatus("❌ JFK audio file not found")
+                    return@launch
+                }
+
+                val audioDurationSec = jfkAudioData.size / (16000 * 2).toFloat()
+                transcriptionText.text = "🎬 JFK Audio Loaded: ${audioDurationSec}s\n\nStarting real-time transcription...\n\n"
+
+                // Clear any previous text
+                voicePipeline.clearText()
+
+                    // Feed JFK audio through the pipeline for real-time transcription
+                    voicePipeline.feedFileAudio(
+                        audioData = jfkAudioData,
+                        chunkSizeBytes = 8000, // 0.25 seconds at 16kHz (mobile-optimized)
+                        delayMs = 250L // 250ms delay to simulate real-time
+                    )
+
+                // Get final accumulated text
+                val finalText = voicePipeline.getText()
+                
+                transcriptionText.text = """
+                    🎬 Live JFK Demo Complete!
+                    
+                    📊 Results:
+                    • Audio Duration: ${audioDurationSec}s
+                    • Final Text Length: ${finalText.length} characters
+                    • Processing: Real-time streaming through VAD pipeline
+                    
+                    📝 Transcribed Text:
+                    "$finalText"
+                    
+                    ✅ This demonstrates the pipeline's ability to process file audio
+                    with the same real-time streaming capabilities as microphone input!
+                """.trimIndent()
+
+                updateStatus("✅ Live JFK Demo completed - See transcription below")
+
+            } catch (e: Exception) {
+                transcriptionText.text = "❌ Live JFK Demo failed: ${e.message}\n\nError details: ${e.stackTraceToString()}"
+                updateStatus("❌ Live JFK Demo failed: ${e.message}")
+            } finally {
+                liveJFKButton.isEnabled = true
+            }
+        }
+    }
+
+    /**
+     * Load JFK audio file from assets
+     */
+    private fun loadJFKAudioFromAssets(): ByteArray? {
+        return try {
+            val inputStream = assets.open("jfk.wav")
+            val audioData = inputStream.readBytes()
+            inputStream.close()
+            audioData
+        } catch (e: Exception) {
+            android.util.Log.e("AudioTestActivity", "Failed to load JFK audio: ${e.message}")
+            null
         }
     }
 
