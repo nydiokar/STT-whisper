@@ -200,22 +200,34 @@ class AudioProcessor(
         val vadFrameSize = vad.getFrameSizeBytes()
         
         return if (audioData.size <= vadFrameSize) {
-            // Small chunk - process directly
-            vad.isSilent(audioData)
+            // Small chunk - pad if too small, process if exact size
+            if (audioData.size < vadFrameSize) {
+                // Chunk too small for VAD - assume silence to avoid errors
+                Log.d(TAG, "Audio chunk too small for VAD (${audioData.size} < $vadFrameSize bytes) - assuming silence")
+                true
+            } else {
+                vad.isSilent(audioData)
+            }
         } else {
-            // Large chunk - split into VAD frames and process each
-            val frames = audioData.toList().chunked(vadFrameSize)
+            // Large chunk - split into VAD frames, only process complete frames
             var hasSpeech = false
-            
-            for (frame in frames) {
-                val frameBytes = frame.toByteArray()
+            var offset = 0
+
+            while (offset + vadFrameSize <= audioData.size) {
+                val frameBytes = audioData.sliceArray(offset until offset + vadFrameSize)
                 val isFrameSilent = vad.isSilent(frameBytes)
                 if (!isFrameSilent) {
                     hasSpeech = true
                     break // Early exit on first speech detection
                 }
+                offset += vadFrameSize
             }
-            
+
+            // Ignore remaining bytes if they don't form a complete frame
+            if (audioData.size - offset > 0) {
+                Log.d(TAG, "Ignoring ${audioData.size - offset} remaining bytes (incomplete VAD frame)")
+            }
+
             !hasSpeech // Return true if silent (i.e., not speech)
         }
     }
@@ -253,7 +265,7 @@ class AudioProcessor(
                     null -> {
                         // Timeout occurred - check for inactivity processing (matching desktop timeout logic)
                         if (bufferState.activeSpeechBuffer.size >= minAudioLengthBytes && !hasRecentAudio()) {
-                            Log.i(TAG, "Processing chunk due to inactivity timeout (${bufferState.activeSpeechBuffer.size} bytes)")
+                            Log.i(TAG, "Processing chunk: ${bufferState.activeSpeechBuffer.size} bytes (timeout)")
                             processAudioBuffer(bufferState.activeSpeechBuffer)
                             bufferState = bufferState.cleared()
                         }
@@ -279,10 +291,7 @@ class AudioProcessor(
             val currentTime = System.currentTimeMillis()
             val timeSinceLastSpeech = (currentTime - currentState.lastSpeechTime) / 1000.0
 
-            // Only log significant state changes (reduce log spam)
-            if (!isChunkSilent) {
-                Log.d(TAG, "🎤 Speech detected: ${audioChunk.size} bytes → Buffer: ${currentState.activeSpeechBuffer.size + audioChunk.size} bytes")
-            }
+            // PERFORMANCE: Minimal logging in hot path - only log major events
 
             return if (!isChunkSilent) {
                 // Speech detected - use streaming optimization
@@ -290,7 +299,8 @@ class AudioProcessor(
 
                 // Process if buffer exceeds max duration/size (matching desktop logic)
                 if (newState.activeSpeechBuffer.size >= maxChunkBytes) {
-                    Log.i(TAG, "📤 Processing chunk: ${newState.activeSpeechBuffer.size} bytes (max size reached)")
+                    // PERFORMANCE: Reduced logging - only log when processing
+                    Log.i(TAG, "Processing chunk: ${newState.activeSpeechBuffer.size} bytes (max size)")
                     processAudioBuffer(newState.activeSpeechBuffer)
                     newState.cleared()
                 } else {
@@ -301,7 +311,7 @@ class AudioProcessor(
                 if (currentState.activeSpeechBuffer.size >= minAudioLengthBytes &&
                     timeSinceLastSpeech >= silenceDurationSec) {
                     // Process buffer due to silence after speech
-                    Log.i(TAG, "📤 Processing chunk: ${currentState.activeSpeechBuffer.size} bytes (silence after speech)")
+                    Log.i(TAG, "Processing chunk: ${currentState.activeSpeechBuffer.size} bytes (silence)")
                     processAudioBuffer(currentState.activeSpeechBuffer)
                     currentState.cleared()
                 } else if (currentState.activeSpeechBuffer.isNotEmpty()) {
@@ -310,7 +320,7 @@ class AudioProcessor(
 
                     // Process if silence makes buffer exceed max size (matching desktop logic)
                     if (newState.activeSpeechBuffer.size >= maxChunkBytes) {
-                        Log.i(TAG, "📤 Processing chunk: ${newState.activeSpeechBuffer.size} bytes (max size during silence)")
+                        Log.i(TAG, "Processing chunk: ${newState.activeSpeechBuffer.size} bytes (max size silence)")
                         processAudioBuffer(newState.activeSpeechBuffer)
                         newState.cleared()
                     } else {

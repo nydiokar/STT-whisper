@@ -116,9 +116,10 @@ class VoiceInputPipeline(
             // Use desktop approach: immediate text appending with overlap detection
             accumulatedText = textProcessor.appendText(accumulatedText, filtered)
 
-            // Log streaming progress
-            Log.i(TAG, "🚀 Streaming chunk #$transcriptionCount: '$filtered' (${result.processingTimeMs}ms)")
-            Log.d(TAG, "📝 Updated text: '${accumulatedText.takeLast(50)}...' (${accumulatedText.length} chars)")
+            // PERFORMANCE: Reduced logging frequency for streaming
+            if (transcriptionCount % 5 == 0) {
+                Log.i(TAG, "Streaming chunk #$transcriptionCount: ${accumulatedText.length} chars (${result.processingTimeMs}ms)")
+            }
 
             // Notify result callback on main thread with immediate update
             scope.launch(Dispatchers.Main) {
@@ -261,9 +262,9 @@ class VoiceInputPipeline(
      * @param delayMs Delay between chunks to simulate real-time (default: 100ms)
      */
     suspend fun feedFileAudio(
-        audioData: ByteArray, 
+        audioData: ByteArray,
         chunkSizeBytes: Int = 8000, // 0.25 seconds at 16kHz (more reasonable for mobile)
-        delayMs: Long = 250L // 250ms delay to simulate real-time
+        delayMs: Long = 0L // PERFORMANCE: No delay - process as fast as possible
     ) {
         if (isRunning) {
             Log.w(TAG, "Pipeline already running - cannot feed file audio")
@@ -292,22 +293,25 @@ class VoiceInputPipeline(
             val chunks = audioData.toList().chunked(chunkSizeBytes)
             Log.i(TAG, "📤 Feeding ${chunks.size} audio chunks through pipeline (${chunkSizeBytes}-byte chunks)...")
 
-            // Feed chunks through the pipeline with real-time simulation
+            // Feed chunks through the pipeline at maximum speed
             for ((index, chunk) in chunks.withIndex()) {
                 val chunkBytes = chunk.toByteArray()
 
-                // Simulate real-time by adding delay
-                delay(delayMs)
+                // PERFORMANCE: Only delay if specified (0 = no delay for max speed)
+                if (delayMs > 0) {
+                    delay(delayMs)
+                }
 
                 // Feed chunk directly to AudioProcessor (same as microphone input)
                 audioProcessor.addAudio(chunkBytes)
 
-                if (index % 10 == 0) {
-                    Log.d(TAG, "Fed chunk ${index + 1}/${chunks.size} through pipeline")
+                // PERFORMANCE: Reduced logging frequency
+                if (index % 25 == 0) {
+                    Log.d(TAG, "Fed chunk ${index + 1}/${chunks.size}")
                 }
             }
 
-            Log.i(TAG, "✅ Finished feeding file audio chunks through pipeline")
+            Log.i(TAG, "Finished feeding ${chunks.size} audio chunks through pipeline")
             
             // Wait a bit for final processing
             delay(1000)

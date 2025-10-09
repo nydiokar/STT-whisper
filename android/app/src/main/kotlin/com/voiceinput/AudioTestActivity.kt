@@ -37,6 +37,7 @@ class AudioTestActivity : AppCompatActivity() {
     private lateinit var testVADButton: Button
     private lateinit var testStreamingButton: Button
     private lateinit var liveJFKButton: Button
+    private lateinit var bareWhisperBenchButton: Button
 
     private lateinit var audioRecorder: AudioRecorder
     private lateinit var whisperEngine: WhisperEngine
@@ -47,6 +48,9 @@ class AudioTestActivity : AppCompatActivity() {
 
     companion object {
         private const val RECORD_AUDIO_PERMISSION_CODE = 1001
+
+        // ⚡ CENTRAL MODEL CONFIGURATION - Change this to switch models for ALL tests
+        private const val WHISPER_MODEL = "tiny"  // Options: "tiny", "base"
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -118,6 +122,15 @@ class AudioTestActivity : AppCompatActivity() {
         }
         layout.addView(liveJFKButton)
 
+        // BARE WHISPER BENCHMARK button (DEFINITIVE TEST)
+        bareWhisperBenchButton = Button(this).apply {
+            text = "🔬 BARE WHISPER BENCHMARK (Definitive)"
+            isEnabled = false
+            setOnClickListener { runBareWhisperBenchmark() }
+            setBackgroundColor(0xFF4CAF50.toInt()) // Green to highlight it
+        }
+        layout.addView(bareWhisperBenchButton)
+
         // Transcription output
         layout.addView(TextView(this).apply {
             text = "Transcription Output:"
@@ -175,10 +188,15 @@ class AudioTestActivity : AppCompatActivity() {
                 updateStatus("✅ AudioRecorder initialized")
 
                 // Initialize Whisper engine
-                whisperEngine = WhisperEngine(this@AudioTestActivity)
+                whisperEngine = WhisperEngine(this@AudioTestActivity, modelName = WHISPER_MODEL)
 
-                // Initialize Whisper from assets
-                val success = whisperEngine.initializeFromAssets("models/ggml-base.en-q5_1.bin")
+                // Initialize Whisper from assets - use centralized model config
+                val modelPath = if (WHISPER_MODEL == "tiny") {
+                    "models/ggml-tiny-q5_1.bin"
+                } else {
+                    "models/ggml-$WHISPER_MODEL.en-q5_1.bin"
+                }
+                val success = whisperEngine.initializeFromAssets(modelPath)
                 if (success) {
                     updateStatus("✅ WhisperEngine initialized with model from assets")
                 } else {
@@ -252,6 +270,7 @@ class AudioTestActivity : AppCompatActivity() {
         testVADButton.isEnabled = true
         testStreamingButton.isEnabled = true
         liveJFKButton.isEnabled = true
+        bareWhisperBenchButton.isEnabled = true
         updateStatus("✅ Ready to test - Click a button to start")
     }
 
@@ -742,11 +761,11 @@ class AudioTestActivity : AppCompatActivity() {
                 // Clear any previous text
                 voicePipeline.clearText()
 
-                    // Feed JFK audio through the pipeline for real-time transcription
+                    // Feed JFK audio through the pipeline at maximum speed
                     voicePipeline.feedFileAudio(
                         audioData = jfkAudioData,
                         chunkSizeBytes = 8000, // 0.25 seconds at 16kHz (mobile-optimized)
-                        delayMs = 250L // 250ms delay to simulate real-time
+                        delayMs = 0L // PERFORMANCE: No delay for maximum speed
                     )
 
                 // Get final accumulated text
@@ -807,6 +826,133 @@ class AudioTestActivity : AppCompatActivity() {
         if (::whisperEngine.isInitialized) {
             lifecycleScope.launch {
                 whisperEngine.release()
+            }
+        }
+    }
+
+    /**
+     * 🔬 DEFINITIVE BARE WHISPER BENCHMARK
+     *
+     * This is THE test to determine if whisper.cpp is configured correctly.
+     * Tests ONLY: Audio → WhisperEngine → Result
+     * NO: VAD, Streaming, Pipeline, or any other overhead
+     *
+     * Expected results for base model on modern phone (6-8 cores):
+     * - Real-time factor: 0.5x - 1.0x (faster than or equal to real-time)
+     * - 11s JFK audio should process in ~5-11 seconds
+     *
+     * If slower than 2x real-time, something is wrong with:
+     * - Thread count
+     * - JNI parameters
+     * - Model file
+     * - Device performance
+     */
+    private fun runBareWhisperBenchmark() {
+        lifecycleScope.launch {
+            try {
+                updateStatus("🔬 Running BARE WHISPER benchmark...")
+                bareWhisperBenchButton.isEnabled = false
+                transcriptionText.text = """
+                    🔬 BARE WHISPER BENCHMARK
+                    ========================
+
+                    Running definitive performance test...
+                    This tests ONLY whisper.cpp (no VAD, no streaming, no pipeline)
+
+                    Testing with JFK audio file...
+                """.trimIndent()
+
+                val benchmark = BareWhisperBenchmark(this@AudioTestActivity)
+                val result = benchmark.benchmarkWithJFKAudio(WHISPER_MODEL)
+
+                runOnUiThread {
+                    if (result.success) {
+                        val verdict = when {
+                            result.realTimeFactor < 0.5f -> "🚀 EXCELLENT - Much faster than real-time!"
+                            result.realTimeFactor < 1.0f -> "⚡ GOOD - Faster than real-time"
+                            result.realTimeFactor < 1.5f -> "✅ ACCEPTABLE - Near real-time"
+                            result.realTimeFactor < 2.0f -> "⚠️ SLOW - Slower than real-time"
+                            else -> "🐌 VERY SLOW - Performance issue detected"
+                        }
+
+                        transcriptionText.text = """
+                            🔬 BARE WHISPER BENCHMARK RESULTS
+                            ====================================
+
+                            Model: ${result.modelName}
+                            Audio Length: ${String.format("%.1f", result.audioLengthSec)}s
+                            Processing Time: ${result.transcriptionTimeMs}ms (${String.format("%.1f", result.transcriptionTimeMs / 1000.0)}s)
+
+                            ⚡ REAL-TIME FACTOR: ${String.format("%.2f", result.realTimeFactor)}x
+
+                            VERDICT: $verdict
+
+                            Threads Used: ${result.threadCount}
+                            CPU Cores Available: ${Runtime.getRuntime().availableProcessors()}
+
+                            Transcription:
+                            "${result.transcribedText}"
+
+                            ====================================
+
+                            ANALYSIS:
+                            ${if (result.realTimeFactor > 1.5f) {
+                                """
+                                ⚠️ Performance is slower than expected!
+
+                                Possible causes:
+                                1. Check logcat for actual thread count used
+                                2. Verify model file is quantized (q5_1)
+                                3. Check device CPU performance
+                                4. Ensure JNI optimizations are compiled
+                                """.trimIndent()
+                            } else if (result.realTimeFactor < 1.0f) {
+                                """
+                                ✅ Excellent performance!
+                                whisper.cpp is configured correctly.
+
+                                Now you can safely add:
+                                - VAD processing
+                                - Streaming mode
+                                - Full pipeline
+                                """.trimIndent()
+                            } else {
+                                """
+                                ✅ Performance is acceptable.
+                                whisper.cpp baseline is working.
+
+                                Adding VAD/streaming will add ~10-20% overhead.
+                                """.trimIndent()
+                            }}
+
+                            ====================================
+                            Check logcat for detailed timings from whisper.cpp
+                        """.trimIndent()
+                        updateStatus("✅ Benchmark complete - See results above")
+                    } else {
+                        transcriptionText.text = """
+                            ❌ BENCHMARK FAILED
+
+                            Error: ${result.error}
+
+                            Possible causes:
+                            - Model file not found in assets/models/
+                            - JNI compilation issue
+                            - Memory constraints
+                        """.trimIndent()
+                        updateStatus("❌ Benchmark failed - See error above")
+                    }
+                }
+
+            } catch (e: Exception) {
+                runOnUiThread {
+                    transcriptionText.text = "❌ Benchmark error: ${e.message}\n\n${e.stackTraceToString()}"
+                    updateStatus("❌ Benchmark error")
+                }
+            } finally {
+                runOnUiThread {
+                    bareWhisperBenchButton.isEnabled = true
+                }
             }
         }
     }

@@ -220,7 +220,58 @@
 
 ---
 
-## 📌 Notes & Decisions
+## 🧪 Test Results & Performance Log
+
+### Test Configuration Log
+
+| Test ID | Date | Model | Chunk Size | Max Duration | VAD Threshold | File Chunks | Performance | Notes |
+|---------|------|-------|------------|--------------|---------------|-------------|-------------|-------|
+| **TEST-001** | 2025-09-29 | `ggml-base.bin` | 1024 bytes | 3.0s | 0.3 | 16KB (0.5s) | **86-90s per 3s chunk** (28-30x slower) | ❌ **Too slow** - 3-second chunks taking 85-90 seconds |
+| **TEST-002** | 2025-09-29 | `ggml-base.en-q5_1.bin` | 1024 bytes | 1.0s | 0.3 | 8KB (0.25s) | **TBD** | ✅ **Optimized** - Quantized model + smaller chunks |
+
+### Performance Analysis
+
+#### TEST-001 Results (Original Configuration):
+- **Model**: `ggml-base.bin` (142 MB, non-quantized)
+- **Chunk Processing**: 3-second chunks (96KB = 48,000 samples)
+- **Processing Time**: 86,277ms - 92,841ms per chunk
+- **Performance Ratio**: 28-30x slower than real-time
+- **VAD Performance**: ✅ Working perfectly (probabilities: 0.332-0.773)
+- **Issues**: 
+  - Massive chunks too large for mobile Whisper
+  - Non-quantized model slower on mobile
+  - Buffer accumulation to 96KB before processing
+
+#### TEST-002 Configuration (Optimized):
+- **Model**: `ggml-base.en-q5_1.bin` (quantized base model)
+- **Chunk Processing**: 1-second chunks (32KB = 16,000 samples)
+- **File Chunks**: 8KB (0.25s) instead of 16KB (0.5s)
+- **Expected Performance**: 8-15x slower (2-3x improvement)
+- **Optimizations Applied**:
+  - ✅ Quantized model for 20-30% speed boost
+  - ✅ Reduced max chunk duration: 3s → 1s
+  - ✅ Smaller file chunks: 16KB → 8KB
+  - ✅ VAD frame splitting for large chunks
+  - ✅ Error recovery for tensor corruption
+
+### Performance Targets
+
+| Metric | Target | TEST-001 | TEST-002 (Expected) |
+|--------|--------|----------|---------------------|
+| **Processing Speed** | <5x real-time | 28-30x slower | 8-15x slower |
+| **Chunk Size** | <2s | 3s (too large) | 1s (optimal) |
+| **Memory Usage** | <200MB | ~200MB+ | <150MB |
+| **VAD Accuracy** | >0.5 prob | ✅ 0.3-0.8 | ✅ Expected same |
+| **Transcription Quality** | High | ✅ Good | ✅ Expected same |
+
+### Next Test Plans
+
+- **TEST-003**: Try `ggml-tiny.en.bin` for maximum speed (if accuracy acceptable)
+- **TEST-004**: Test `ggml-small-q5_1.bin` for better accuracy (if speed acceptable)
+- **TEST-005**: Optimize thread count and Whisper parameters
+- **TEST-006**: Test different chunk sizes (0.5s, 1.5s, 2s)
+
+---
 
 ### 2025-09-23
 - Decided on monorepo structure (desktop + android)

@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "Bash(mkdir:*)",
-      "Bash(./gradlew:*)"
+      "Bash(./gradlew:*)",
+      "Read(//c/Users/Cicada38/Projects/whisperIME/**)"
     ],
     "deny": [
       "Read(.env)",

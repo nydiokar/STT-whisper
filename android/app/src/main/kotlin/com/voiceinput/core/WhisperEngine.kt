@@ -122,9 +122,8 @@ class WhisperEngine(
         Log.i(TAG, "Transcribing ${audioDurationSec}s of audio")
 
         try {
-            memoryManager.logMemoryStatus("Before transcription")
-
-            // Check memory before heavy processing
+            // PERFORMANCE: Reduced memory management overhead in hot path
+            // Only check memory if it's critical, don't log status frequently
             if (memoryManager.isMemoryCritical()) {
                 Log.w(TAG, "Critical memory before transcription - requesting GC")
                 memoryManager.requestGarbageCollection("Pre-transcription")
@@ -132,23 +131,19 @@ class WhisperEngine(
             }
 
             // Convert ByteArray to FloatArray (PCM 16-bit to float32)
-            Log.d(TAG, "Converting ${audioData.size} bytes to float array...")
             val floatArray = convertBytesToFloats(audioData)
-            Log.d(TAG, "Float array size: ${floatArray.size} samples")
-
-            memoryManager.logMemoryStatus("After audio conversion")
 
             // Call the actual Whisper API with timeout
             Log.d(TAG, "Starting Whisper transcription...")
             val startTime = System.currentTimeMillis()
 
-            // Optimized timeout for faster response with tiny model
-            val transcriptionText = withTimeout(120_000) { // 2 minute timeout for streaming tests
+            // Timeout for transcription - increased for current performance issues
+            val transcriptionText = withTimeout(300_000) { // 5 minute timeout until performance is optimized
                 whisperContext!!.transcribeData(floatArray, printTimestamp = false)
             }
             val elapsedMs = System.currentTimeMillis() - startTime
 
-            memoryManager.logMemoryStatus("After transcription")
+            // PERFORMANCE: Removed memory logging from hot path
             Log.i(TAG, "Transcription complete in ${elapsedMs}ms: '$transcriptionText'")
 
             return@withContext TranscriptionResult(

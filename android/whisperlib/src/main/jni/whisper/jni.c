@@ -170,18 +170,50 @@ Java_com_whispercpp_whisper_WhisperLib_00024Companion_fullTranscribe(
     jfloat *audio_data_arr = (*env)->GetFloatArrayElements(env, audio_data, NULL);
     const jsize audio_data_length = (*env)->GetArrayLength(env, audio_data);
 
-    // Optimized parameters for production (not debug!)
+    // ⚡ MAXIMUM PERFORMANCE CONFIGURATION ⚡
+    // Using GREEDY sampling (fastest strategy)
     struct whisper_full_params params = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
-    params.print_realtime = false;     // ❌ DISABLE - kills performance
-    params.print_progress = false;     // ✅ Keep disabled
-    params.print_timestamps = false;   // ❌ DISABLE - we don't need timestamps for basic transcription
-    params.print_special = false;      // ✅ Keep disabled
-    params.translate = false;          // ✅ Keep disabled
-    params.language = "en";            // ✅ Good
-    params.n_threads = num_threads;    // ✅ Good
-    params.offset_ms = 0;              // ✅ Good
-    params.no_context = false;         // ❌ ENABLE context for better accuracy
-    params.single_segment = false;     // ✅ Good for longer audio
+
+    // === DISABLE ALL OUTPUT (huge performance gain) ===
+    params.print_realtime = false;     // ⚡ CRITICAL - printing kills performance
+    params.print_progress = false;
+    params.print_timestamps = false;
+    params.print_special = false;
+
+    // === CORE SETTINGS ===
+    params.translate = false;
+    params.language = "en";
+    params.n_threads = num_threads;    // ⚡ Now using ALL cores
+    params.offset_ms = 0;
+    params.duration_ms = 0;            // Process entire audio
+
+    // === PERFORMANCE OPTIMIZATIONS ===
+    params.no_context = true;          // ⚡ Skip context analysis (faster, slightly less accurate)
+    params.no_timestamps = false;      // Generate timestamps (needed for segments)
+    params.single_segment = false;     // Allow multiple segments
+    params.token_timestamps = false;   // ⚡ No token-level timestamps (faster)
+    params.max_len = 0;               // No segment length limit
+    params.max_tokens = 0;            // No token limit
+    params.split_on_word = true;       // Default
+    params.audio_ctx = 0;             // ⚡ Use model default (1500 for tiny, optimal for quality/speed balance)
+    params.n_max_text_ctx = 0;        // ⚡ Use model default (16384, prevents hallucination loops)
+    params.debug_mode = false;         // ⚡ Disable debug (faster)
+    params.tdrz_enable = false;        // No diarization
+    params.detect_language = false;    // ⚡ Language is known (faster)
+
+    // === TEMPERATURE FALLBACK (disable for speed) ===
+    params.temperature = 0.0f;         // ⚡ Deterministic, single-pass
+    params.temperature_inc = 0.0f;     // ⚡ No fallback attempts (faster)
+    params.entropy_thold = 2.4f;       // Default
+    params.logprob_thold = -1.0f;      // Default
+    params.no_speech_thold = 0.6f;     // Default
+
+    // === SUPPRESS SETTINGS ===
+    params.suppress_blank = true;      // Default
+    params.suppress_nst = false;       // Default
+
+    // === GREEDY SAMPLING STRATEGY ===
+    params.greedy.best_of = 1;         // ⚡ Single pass only (fastest)
 
     whisper_reset_timings(context);
 
@@ -197,7 +229,22 @@ Java_com_whispercpp_whisper_WhisperLib_00024Companion_fullTranscribe(
         return (*env)->NewStringUTF(env, "");  // Return empty string on error
     } else {
         LOGI("Model ran successfully, printing timings...");
-        whisper_print_timings(context);
+
+        // Extract and log detailed timings (whisper_print_timings goes to stdout, not logcat)
+        struct whisper_timings * timings = whisper_get_timings(context);
+
+        LOGI("========================================");
+        LOGI("⏱️ WHISPER.CPP DETAILED TIMINGS:");
+        LOGI("========================================");
+        LOGI("  Sample time:  %8.2f ms (token sampling)", timings->sample_ms);
+        LOGI("  Encode time:  %8.2f ms (encoder forward pass)", timings->encode_ms);
+        LOGI("  Decode time:  %8.2f ms (decoder forward pass)", timings->decode_ms);
+        LOGI("  Batch time:   %8.2f ms (batch decoding)", timings->batchd_ms);
+        LOGI("  Prompt time:  %8.2f ms (prompt processing)", timings->prompt_ms);
+        LOGI("========================================");
+        LOGI("  TOTAL:        %8.2f ms", timings->sample_ms + timings->encode_ms + timings->decode_ms + timings->batchd_ms + timings->prompt_ms);
+        LOGI("========================================");
+
         LOGI("Timings printed, transcription complete");
         
         // Extract transcription text
