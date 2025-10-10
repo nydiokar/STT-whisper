@@ -57,11 +57,9 @@ dependencies {
     // Preferences
     implementation("androidx.preference:preference-ktx:1.2.1")
 
-    // ONNX Runtime (for Silero VAD)
-    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.16.0")
-
-    // Official Whisper.cpp library
-    implementation(project(":whisperlib"))
+    // ONNX Runtime (for both Silero VAD and Whisper)
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.19.0")
+    implementation("com.microsoft.onnxruntime:onnxruntime-extensions-android:0.12.4")
 
     // JSON (for config) - updated version
     implementation("com.google.code.gson:gson:2.10.1")

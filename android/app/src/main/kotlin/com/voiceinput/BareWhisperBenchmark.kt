@@ -42,32 +42,28 @@ class BareWhisperBenchmark(private val context: Context) {
     /**
      * Run definitive benchmark with pre-recorded JFK audio
      */
-    suspend fun benchmarkWithJFKAudio(modelName: String = "tiny"): BenchmarkResult = withContext(Dispatchers.IO) {
+    suspend fun benchmarkWithJFKAudio(modelSize: String = "small"): BenchmarkResult = withContext(Dispatchers.IO) {
         Log.i(TAG, "========================================")
         Log.i(TAG, "🔬 BARE WHISPER BENCHMARK - JFK Audio")
+        Log.i(TAG, "   Model: ${modelSize.uppercase()}")
         Log.i(TAG, "========================================")
 
-        val whisperEngine = WhisperEngine(context, modelName = modelName)
+        val whisperEngine = WhisperEngine(context, modelSize = modelSize)
 
         try {
-            // Load model - try with/without ".en" suffix
-            Log.i(TAG, "📦 Loading model: $modelName")
-            val modelPath = if (modelName == "tiny") {
-                "models/ggml-tiny-q5_1.bin"  // tiny doesn't have .en version
-            } else {
-                "models/ggml-$modelName.en-q5_1.bin"  // base has .en version
-            }
-            val modelLoaded = whisperEngine.initializeFromAssets(modelPath)
+            // Initialize ONNX model
+            Log.i(TAG, "📦 Initializing ${modelSize.uppercase()} model...")
+            val modelLoaded = whisperEngine.initialize()
             if (!modelLoaded) {
                 return@withContext BenchmarkResult(
-                    modelName = modelName,
+                    modelName = modelSize,
                     audioLengthSec = 0f,
                     threadCount = 0,
                     transcriptionTimeMs = 0,
                     realTimeFactor = 0f,
                     transcribedText = "",
                     success = false,
-                    error = "Failed to load model"
+                    error = "Failed to initialize model"
                 )
             }
 
@@ -76,7 +72,7 @@ class BareWhisperBenchmark(private val context: Context) {
             val audioData = loadJFKAudio()
             if (audioData == null) {
                 return@withContext BenchmarkResult(
-                    modelName = modelName,
+                    modelName = modelSize,
                     audioLengthSec = 0f,
                     threadCount = 0,
                     transcriptionTimeMs = 0,
@@ -92,10 +88,10 @@ class BareWhisperBenchmark(private val context: Context) {
 
             Log.i(TAG, "")
             Log.i(TAG, "📊 BENCHMARK PARAMETERS:")
-            Log.i(TAG, "   Model: $modelName")
+            Log.i(TAG, "   Model: Whisper ${modelSize.uppercase()} (ONNX INT8)")
             Log.i(TAG, "   Audio: ${audioLengthSec}s (${audioData.size} bytes)")
             Log.i(TAG, "   Threads: $threadCount (${Runtime.getRuntime().availableProcessors()} cores available)")
-            Log.i(TAG, "   Test: Direct WhisperEngine.transcribe() - NO VAD, NO STREAMING")
+            Log.i(TAG, "   Test: Direct WhisperEngine.transcribe() with APU acceleration")
             Log.i(TAG, "")
 
             // THE BENCHMARK: Pure whisper.cpp call
@@ -122,7 +118,7 @@ class BareWhisperBenchmark(private val context: Context) {
             whisperEngine.release()
 
             return@withContext BenchmarkResult(
-                modelName = modelName,
+                modelName = modelSize,
                 audioLengthSec = audioLengthSec,
                 threadCount = threadCount,
                 transcriptionTimeMs = elapsedMs,
@@ -135,7 +131,7 @@ class BareWhisperBenchmark(private val context: Context) {
             Log.e(TAG, "❌ Benchmark failed", e)
             whisperEngine.release()
             return@withContext BenchmarkResult(
-                modelName = modelName,
+                modelName = modelSize,
                 audioLengthSec = 0f,
                 threadCount = 0,
                 transcriptionTimeMs = 0,
@@ -151,34 +147,30 @@ class BareWhisperBenchmark(private val context: Context) {
      * Run benchmark with synthetic audio (for testing without JFK file)
      */
     suspend fun benchmarkWithSyntheticAudio(
-        modelName: String = "tiny",
+        modelSize: String = "small",
         durationSec: Int = 5
     ): BenchmarkResult = withContext(Dispatchers.IO) {
         Log.i(TAG, "========================================")
         Log.i(TAG, "🔬 BARE WHISPER BENCHMARK - Synthetic Audio")
+        Log.i(TAG, "   Model: ${modelSize.uppercase()}")
         Log.i(TAG, "========================================")
 
-        val whisperEngine = WhisperEngine(context, modelName = modelName)
+        val whisperEngine = WhisperEngine(context, modelSize = modelSize)
 
         try {
-            // Load model - try with/without ".en" suffix
-            Log.i(TAG, "📦 Loading model: $modelName")
-            val modelPath = if (modelName == "tiny") {
-                "models/ggml-tiny-q5_1.bin"  // tiny doesn't have .en version
-            } else {
-                "models/ggml-$modelName.en-q5_1.bin"  // base has .en version
-            }
-            val modelLoaded = whisperEngine.initializeFromAssets(modelPath)
+            // Initialize ONNX model
+            Log.i(TAG, "📦 Initializing ${modelSize.uppercase()} model...")
+            val modelLoaded = whisperEngine.initialize()
             if (!modelLoaded) {
                 return@withContext BenchmarkResult(
-                    modelName = modelName,
+                    modelName = modelSize,
                     audioLengthSec = 0f,
                     threadCount = 0,
                     transcriptionTimeMs = 0,
                     realTimeFactor = 0f,
                     transcribedText = "",
                     success = false,
-                    error = "Failed to load model"
+                    error = "Failed to initialize model"
                 )
             }
 
@@ -190,7 +182,7 @@ class BareWhisperBenchmark(private val context: Context) {
 
             Log.i(TAG, "")
             Log.i(TAG, "📊 BENCHMARK PARAMETERS:")
-            Log.i(TAG, "   Model: $modelName")
+            Log.i(TAG, "   Model: Whisper ${modelSize.uppercase()} (ONNX INT8)")
             Log.i(TAG, "   Audio: ${audioLengthSec}s synthetic (${audioData.size} bytes)")
             Log.i(TAG, "   Threads: $threadCount")
             Log.i(TAG, "")
@@ -217,7 +209,7 @@ class BareWhisperBenchmark(private val context: Context) {
             whisperEngine.release()
 
             return@withContext BenchmarkResult(
-                modelName = modelName,
+                modelName = modelSize,
                 audioLengthSec = audioLengthSec,
                 threadCount = threadCount,
                 transcriptionTimeMs = elapsedMs,
@@ -230,7 +222,7 @@ class BareWhisperBenchmark(private val context: Context) {
             Log.e(TAG, "❌ Benchmark failed", e)
             whisperEngine.release()
             return@withContext BenchmarkResult(
-                modelName = modelName,
+                modelName = modelSize,
                 audioLengthSec = 0f,
                 threadCount = 0,
                 transcriptionTimeMs = 0,

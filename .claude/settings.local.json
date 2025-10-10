@@ -3,7 +3,9 @@
     "allow": [
       "Bash(mkdir:*)",
       "Bash(./gradlew:*)",
-      "Read(//c/Users/Cicada38/Projects/whisperIME/**)"
+      "Read(//c/Users/Cicada38/Projects/whisperIME/**)",
+      "Read(//c/Users/Cicada38/Projects/RTranslator/**)",
+      "Bash(powershell.exe:*)"
     ],
     "deny": [
       "Read(.env)",

@@ -16,4 +16,3 @@ dependencyResolutionManagement {
 
 rootProject.name = "VoiceInputService"
 include(":app")
-include(":whisperlib")
