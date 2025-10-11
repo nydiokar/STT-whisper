@@ -37,6 +37,10 @@ class AudioProcessor(
     // VAD component (matching desktop initialization)
     private var sileroVAD: SileroVAD? = null
 
+    // VAD frame buffer for handling incomplete frames (FIXED: frame alignment issue)
+    // Stores leftover bytes between isSilent() calls to ensure proper 960-byte frame processing
+    private var vadFrameBuffer = ByteArray(0)
+
     // Configuration values cached for performance - optimized for streaming
     private var minAudioLengthBytes: Int = 0
     private var sampleRate: Int = config.audio.sampleRate
@@ -137,8 +141,9 @@ class AudioProcessor(
             return false
         }
 
-        // Reset timing
+        // Reset timing and VAD buffer
         lastAudioTime.set(System.currentTimeMillis())
+        vadFrameBuffer = ByteArray(0) // Clear any leftover frames from previous session
 
         // Create processing scope and channel
         processingScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
@@ -189,7 +194,12 @@ class AudioProcessor(
 
     /**
      * Determine if audio chunk is silent using VAD (matching desktop _is_silent method)
-     * Handles large chunks by splitting them into VAD-compatible frames
+     * FIXED: Now buffers incomplete frames instead of discarding them
+     *
+     * This ensures:
+     * - Zero data loss at chunk boundaries
+     * - Proper VAD frame alignment (960 bytes)
+     * - Accurate speech detection across arbitrary chunk sizes
      */
     suspend fun isSilent(audioData: ByteArray): Boolean {
         val vad = sileroVAD
@@ -200,38 +210,38 @@ class AudioProcessor(
 
         // VAD expects ~30ms frames (480 samples at 16kHz = 960 bytes)
         val vadFrameSize = vad.getFrameSizeBytes()
-        
-        return if (audioData.size <= vadFrameSize) {
-            // Small chunk - pad if too small, process if exact size
-            if (audioData.size < vadFrameSize) {
-                // Chunk too small for VAD - assume silence to avoid errors
-                Log.d(TAG, "Audio chunk too small for VAD (${audioData.size} < $vadFrameSize bytes) - assuming silence")
-                true
-            } else {
-                vad.isSilent(audioData)
-            }
-        } else {
-            // Large chunk - split into VAD frames, only process complete frames
-            var hasSpeech = false
-            var offset = 0
 
-            while (offset + vadFrameSize <= audioData.size) {
-                val frameBytes = audioData.sliceArray(offset until offset + vadFrameSize)
-                val isFrameSilent = vad.isSilent(frameBytes)
-                if (!isFrameSilent) {
-                    hasSpeech = true
-                    break // Early exit on first speech detection
-                }
-                offset += vadFrameSize
-            }
+        // Combine buffered leftover bytes with new audio data
+        val combined = vadFrameBuffer + audioData
 
-            // Ignore remaining bytes if they don't form a complete frame
-            if (audioData.size - offset > 0) {
-                Log.d(TAG, "Ignoring ${audioData.size - offset} remaining bytes (incomplete VAD frame)")
-            }
-
-            !hasSpeech // Return true if silent (i.e., not speech)
+        // If combined data is still too small for one frame, buffer it and return silence
+        if (combined.size < vadFrameSize) {
+            vadFrameBuffer = combined
+            return true // Assume silence until we have enough data
         }
+
+        // Process all complete VAD frames
+        var hasSpeech = false
+        var offset = 0
+
+        while (offset + vadFrameSize <= combined.size) {
+            val frameBytes = combined.sliceArray(offset until offset + vadFrameSize)
+            val isFrameSilent = vad.isSilent(frameBytes)
+            if (!isFrameSilent) {
+                hasSpeech = true
+                break // Early exit on first speech detection
+            }
+            offset += vadFrameSize
+        }
+
+        // ✅ FIXED: Buffer remaining incomplete frame bytes for next call
+        vadFrameBuffer = if (offset < combined.size) {
+            combined.sliceArray(offset until combined.size)
+        } else {
+            ByteArray(0) // All frames processed cleanly
+        }
+
+        return !hasSpeech // Return true if silent (i.e., not speech)
     }
 
     /**

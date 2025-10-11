@@ -21,8 +21,10 @@ data class AudioConfig(
     // Voice Activity Detection settings
     val vadMode: String = "silero",
     val vadThreshold: Float = 0.3f,  // Reasonable threshold for real speech
-    val silenceDurationSec: Float = 2.0f,
-    val maxChunkDurationSec: Float = 1.0f  // Reduced to 1s for mobile performance (was 3s)
+    val silenceDurationSec: Float = 1.5f,  // Natural pause detection (reduced from 2.0s)
+    val maxChunkDurationSec: Float = 20.0f,  // 20s chunks for proper Whisper context (FIXED: was 1s!)
+    val overlapDurationSec: Float = 3.0f,  // 3s overlap for maintaining context between chunks
+    val enableVAD: Boolean = false  // Disable VAD for now - focus on basic button recording
 ) {
     init {
         require(sampleRate in VALID_SAMPLE_RATES) {
@@ -49,7 +51,7 @@ data class TranscriptionConfig(
     val modelName: String = "base.en-q5_1",  // Quantized base model - faster!
     val language: String = "en",
     val translate: Boolean = false,
-    val minChunkSizeBytes: Int = 32000, // ~1 sec @ 16kHz
+    val minChunkSizeBytes: Int = 24000, // ~0.75 sec minimum @ 16kHz (reduced from 1s)
 
     // Whisper model paths (Android-specific)
     val modelPath: String? = null // Path to GGML model in app storage
