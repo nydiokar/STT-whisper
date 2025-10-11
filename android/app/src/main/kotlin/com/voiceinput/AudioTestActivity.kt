@@ -35,7 +35,6 @@ class AudioTestActivity : AppCompatActivity() {
     private lateinit var transcriptionText: TextView
     private lateinit var recordButton: Button
     private lateinit var testPipelineButton: Button
-    private lateinit var testVADButton: Button
     private lateinit var testStreamingButton: Button
     private lateinit var liveJFKButton: Button
     private lateinit var bareWhisperBenchButton: Button
@@ -100,13 +99,6 @@ class AudioTestActivity : AppCompatActivity() {
         }
         layout.addView(testPipelineButton)
 
-        // Test VAD button (simplified)
-        testVADButton = Button(this).apply {
-            text = "🔬 VAD System Test"
-            isEnabled = false
-            setOnClickListener { testVADWithSyntheticAudio() }
-        }
-        layout.addView(testVADButton)
 
         // Streaming performance test button
         testStreamingButton = Button(this).apply {
@@ -254,14 +246,12 @@ class AudioTestActivity : AppCompatActivity() {
         // Only enable pipeline-dependent buttons if initialization is complete
         if (isInitialized) {
             testPipelineButton.isEnabled = true
-            testVADButton.isEnabled = true
             testStreamingButton.isEnabled = true
             liveJFKButton.isEnabled = true
             bareWhisperBenchButton.isEnabled = true
             updateStatus("✅ Ready to test - Click a button to start")
         } else {
             testPipelineButton.isEnabled = false
-            testVADButton.isEnabled = false
             testStreamingButton.isEnabled = false
             liveJFKButton.isEnabled = false
             bareWhisperBenchButton.isEnabled = false
@@ -426,238 +416,6 @@ class AudioTestActivity : AppCompatActivity() {
                 e.printStackTrace()
             }
         }
-    }
-
-    private fun testVADWithSyntheticAudio() {
-        if (!isInitialized) {
-            updateStatus("❌ Components not yet initialized. Please wait...")
-            Toast.makeText(this, "Please wait for initialization to complete", Toast.LENGTH_SHORT).show()
-            return
-        }
-        
-        lifecycleScope.launch {
-            try {
-                updateStatus("🔬 Testing VAD with synthetic audio...")
-                transcriptionText.text = "Generating synthetic audio test patterns...\n\nThis will test VAD without requiring you to speak."
-
-                // Disable button during test
-                testVADButton.isEnabled = false
-                testVADButton.text = "🟡 Testing VAD..."
-
-                // Test 1: Silence (should return true from isSilent)
-                updateStatus("Testing silence detection...")
-                val silenceAudio = generateSilenceAudio(1.0f) // 1 second of silence
-                
-                // Process silence in 512-sample chunks (32ms each)
-                val chunkSize = 1024 // 512 samples * 2 bytes per sample = 1024 bytes
-                var silentCount = 0
-                var totalChunks = 0
-                for (i in silenceAudio.indices step chunkSize) {
-                    val endIndex = minOf(i + chunkSize, silenceAudio.size)
-                    val chunk = silenceAudio.sliceArray(i until endIndex)
-                    val chunkIsSilent = voicePipeline.testVAD(chunk)
-                    if (chunkIsSilent) silentCount++
-                    totalChunks++
-                    if (totalChunks >= 10) break // Test first 10 chunks
-                }
-                val isSilentResult = silentCount > totalChunks / 2 // Majority should be silent
-
-                // Get current VAD threshold for diagnostic info
-                val config = ConfigRepository(this@AudioTestActivity).load()
-                val vadThreshold = config.audio.vadThreshold
-
-                var testResults = "=== VAD SYSTEM TEST ===\n\n"
-                testResults += "🔇 Silence Detection: ${if (isSilentResult) "✅ PASS" else "❌ FAIL"} (${silentCount}/${totalChunks} chunks)\n"
-
-                // Test 2: Real speech using JFK audio sample
-                updateStatus("Testing real speech detection...")
-                val realSpeechAudio = loadJFKAudio()
-                var realSpeechResult = false
-
-                if (realSpeechAudio != null) {
-                    // Process JFK audio in chunks
-                    var realSpeechCount = 0
-                    var realTotalChunks = 0
-                    var realSpeechProbs = mutableListOf<String>()
-
-                    for (i in realSpeechAudio.indices step chunkSize) {
-                        val endIndex = minOf(i + chunkSize, realSpeechAudio.size)
-                        val chunk = realSpeechAudio.sliceArray(i until endIndex)
-                        val chunkIsSilent = voicePipeline.testVAD(chunk)
-                        if (!chunkIsSilent) realSpeechCount++
-                        realTotalChunks++
-
-                        // Log first few probabilities for debugging
-                        if (realTotalChunks <= 5) {
-                            realSpeechProbs.add("Chunk $realTotalChunks: ${if (chunkIsSilent) "Silent" else "Speech"}")
-                        }
-
-                        if (realTotalChunks >= 20) break // Test first 20 chunks of real speech
-                    }
-                    realSpeechResult = realSpeechCount > realTotalChunks / 3 // At least 1/3 should be speech
-
-                    testResults += "🎤 Real Speech Test (JFK): ${if (realSpeechResult) "✅ PASS" else "❌ FAIL"} (${realSpeechCount}/${realTotalChunks} chunks)\n\n"
-                } else {
-                    testResults += "❌ Could not load JFK audio sample from assets\n\n"
-                }
-
-                // Skip mixed test for cleaner output
-
-                testResults += "=== FINAL RESULT ===\n"
-                val silenceWorking = isSilentResult
-                val realSpeechWorking = if (realSpeechAudio != null) realSpeechResult else false
-
-                if (silenceWorking && realSpeechWorking) {
-                    testResults += "🎉 VAD SYSTEM: FULLY OPERATIONAL!\n"
-                    testResults += "✅ Ready for Phase 4 Integration\n"
-                    testResults += "Threshold: $vadThreshold (optimal for production)"
-                } else if (silenceWorking && !realSpeechWorking && realSpeechAudio != null) {
-                    testResults += "⚠️ VAD Threshold may need adjustment\n"
-                    testResults += "✅ Silence detection working\n"
-                    testResults += "❌ Speech sensitivity low\n"
-                    testResults += "Try threshold: 0.3 for more sensitivity"
-                } else if (silenceWorking && realSpeechAudio == null) {
-                    testResults += "✅ Partial Test Complete\n"
-                    testResults += "Use 'Test VAD Pipeline' for full validation"
-                } else {
-                    testResults += "❌ VAD System Issues\n"
-                    testResults += "Check model initialization and configuration"
-                }
-
-                runOnUiThread {
-                    transcriptionText.text = testResults
-                }
-
-                updateStatus("✅ VAD synthetic audio test complete!")
-                testVADButton.text = "🔬 Test VAD with Synthetic Audio"
-                testVADButton.isEnabled = true
-
-            } catch (e: Exception) {
-                runOnUiThread {
-                    transcriptionText.text = "❌ VAD synthetic test failed: ${e.message}\n\nStack trace:\n${e.stackTraceToString()}"
-                    updateStatus("❌ VAD synthetic test failed: ${e.message}")
-                }
-                testVADButton.text = "🔬 Test VAD with Synthetic Audio"
-                testVADButton.isEnabled = true
-                e.printStackTrace()
-            }
-        }
-    }
-
-    /**
-     * Generate silence audio (all zeros) with VAD-friendly frame size
-     */
-    private fun generateSilenceAudio(durationSeconds: Float): ByteArray {
-        val sampleRate = 16000
-        val bytesPerSample = 2
-
-        // Calculate total samples needed for the duration
-        val totalSamples = (durationSeconds * sampleRate).toInt()
-        val totalBytes = totalSamples * bytesPerSample
-
-        return ByteArray(totalBytes) // All zeros = silence
-    }
-
-    /**
-     * Generate synthetic speech audio optimized for Silero VAD detection
-     */
-    private fun generateSyntheticSpeechAudio(durationSeconds: Float): ByteArray {
-        val sampleRate = 16000
-        val bytesPerSample = 2
-
-        // Calculate total samples needed for the duration
-        val totalSamples = (durationSeconds * sampleRate).toInt()
-        val totalBytes = totalSamples * bytesPerSample
-
-        val audioBytes = ByteArray(totalBytes)
-
-        for (i in 0 until totalSamples) {
-            val t = i.toDouble() / sampleRate
-
-            // Generate more realistic speech-like audio that Silero VAD will recognize
-            // Based on typical human speech characteristics
-
-            // Fundamental frequency (pitch) with natural variation
-            val f0 = 120.0 + 30.0 * kotlin.math.sin(2.0 * kotlin.math.PI * 0.8 * t) // 90-150 Hz pitch variation
-
-            // Formant frequencies (typical for vowel sounds)
-            val formant1 = 600.0 + 200.0 * kotlin.math.sin(2.0 * kotlin.math.PI * 0.3 * t)  // F1: 400-800 Hz
-            val formant2 = 1200.0 + 400.0 * kotlin.math.cos(2.0 * kotlin.math.PI * 0.4 * t) // F2: 800-1600 Hz
-            val formant3 = 2400.0 + 300.0 * kotlin.math.sin(2.0 * kotlin.math.PI * 0.2 * t) // F3: 2100-2700 Hz
-
-            // Generate harmonic series (more realistic than pure sine waves)
-            var harmonic = 0.0
-            for (h in 1..8) { // First 8 harmonics
-                val freq = f0 * h
-                val amplitude = 1.0 / (h * h) // Natural harmonic decay
-                harmonic += amplitude * kotlin.math.sin(2.0 * kotlin.math.PI * freq * t)
-            }
-
-            // Formant filtering (simplified resonance)
-            val formantWave1 = 0.8 * kotlin.math.sin(2.0 * kotlin.math.PI * formant1 * t)
-            val formantWave2 = 0.6 * kotlin.math.sin(2.0 * kotlin.math.PI * formant2 * t)
-            val formantWave3 = 0.4 * kotlin.math.sin(2.0 * kotlin.math.PI * formant3 * t)
-
-            // Add broadband noise (consonant-like energy)
-            val broadbandNoise = generateGaussianNoise() * 0.3
-
-            // Speech-like envelope with pauses (more realistic)
-            val speechPattern = kotlin.math.max(0.0, kotlin.math.sin(2.0 * kotlin.math.PI * 1.5 * t))
-            val envelope = 0.2 + 0.8 * speechPattern * speechPattern // Non-linear envelope
-
-            // Combine all components
-            val speechSignal = (harmonic * 0.4 + formantWave1 + formantWave2 + formantWave3 + broadbandNoise) * envelope
-
-            // Higher amplitude and add spectral richness
-            val sample = (speechSignal * 25000).coerceIn(-32768.0, 32767.0).toInt().toShort()
-
-            // Convert to little-endian bytes
-            val byteIndex = i * 2
-            audioBytes[byteIndex] = (sample.toInt() and 0xFF).toByte()
-            audioBytes[byteIndex + 1] = ((sample.toInt() shr 8) and 0xFF).toByte()
-        }
-
-        return audioBytes
-    }
-
-    /**
-     * Generate mixed audio pattern: silence → speech → silence
-     */
-    private fun generateMixedAudio(): ByteArray {
-        val silence1 = generateSilenceAudio(1.0f)
-        val speech = generateSyntheticSpeechAudio(2.0f)
-        val silence2 = generateSilenceAudio(1.0f)
-
-        return silence1 + speech + silence2
-    }
-
-    /**
-     * Load JFK audio sample from assets
-     */
-    private fun loadJFKAudio(): ByteArray? {
-        return try {
-            assets.open("jfk.wav").use { inputStream ->
-                // Skip WAV header (44 bytes) to get raw PCM data
-                val wavData = inputStream.readBytes()
-                if (wavData.size > 44) {
-                    wavData.sliceArray(44 until wavData.size) // Skip WAV header, return PCM data
-                } else {
-                    null
-                }
-            }
-        } catch (e: Exception) {
-            android.util.Log.e("AudioTest", "Failed to load JFK audio: ${e.message}", e)
-            null
-        }
-    }
-
-    /**
-     * Generate Gaussian noise using Box-Muller transform
-     */
-    private fun generateGaussianNoise(): Double {
-        val u1 = kotlin.random.Random.nextDouble()
-        val u2 = kotlin.random.Random.nextDouble()
-        return kotlin.math.sqrt(-2.0 * kotlin.math.ln(u1)) * kotlin.math.cos(2.0 * kotlin.math.PI * u2)
     }
 
     private fun updateStatus(message: String) {

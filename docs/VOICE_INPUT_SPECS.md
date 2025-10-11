@@ -197,6 +197,9 @@ if (isBluetoothHeadsetConnected()) {
 
 ### From RTranslator (Production-Quality STT)
 
+
+
+
 **1. Whisper SMALL INT8 Model**
 ```
 Model: whisper-small.en (244M parameters)
@@ -307,6 +310,45 @@ AudioConfig(
 
 ### Phase 3: IME Integration (FUTURE)
 **Goal**: Full keyboard replacement functionality
+
+*PLAN FOR MODEL DL AND MODEL PICKER*
+
+Short answer
+Following the current plan mostly adds features/UX; it won’t significantly improve speed on your A34 unless we offer smaller models and let users choose them.
+You can source ONNX tiny/base models reliably from sherpa-onnx and Hugging Face:
+sherpa-onnx provides pre-exported ONNX Whisper models (tiny/base/...); see “Export Whisper to ONNX” and model repos list source.
+Hugging Face has ONNX community builds, e.g. tiny and base variants source, source.
+What to implement (minimal, safe, and device-wide useful)
+Model selection and on-device downloads are easy to add without big refactors. The only caveat: sherpa-onnx models are encoder/decoder pairs with different file names/IO than your current 5-part RTranslator split. So:
+Phase 1: Enable file-based loading for your existing split model (done below).
+Phase 2: Add a model catalog + downloader + settings to pick a variant.
+Phase 3: Add a second engine for sherpa-onnx (or normalize ONNX I/O), so tiny/base can run.
+Minimal code change you already have now
+Your engine now prefers filesDir/models/*.onnx if present, else falls back to assets. That lets us drop replacement files later without touching code. (I kept the filenames consistent with your current split: Whisper_initializer.onnx, Whisper_encoder.onnx, Whisper_cache_initializer.onnx, Whisper_decoder.onnx, Whisper_detokenizer.onnx.)
+Proposed integration plan (practical and incremental)
+Model catalog (static map or JSON):
+Entries: id, displayName, engineType, file list, URLs, expected sizes/hashes.
+Start with:
+small-int8-split (current, assets; no download needed)
+tiny.en-sherpa (encoder.onnx/decoder.onnx/tokens.txt) source
+base.en-sherpa (encoder.onnx/decoder.onnx/tokens.txt) source
+Downloader:
+Use Android DownloadManager for big files, background and resumable.
+Verify file size/hash after download; store under context.filesDir/voice_input_data/models/{modelId}/....
+Settings:
+Add a simple model picker (just a list by displayName). Store choice in AppConfig.transcription.modelName (already supported).
+Engine selection:
+Keep current WhisperEngine for split small model.
+Add WhisperEngineSherpa later for sherpa-onnx (expects encoder/decoder ONNX and tokens). This avoids risky changes in the current engine and lets you ship tiny/base fast once the new engine is added.
+Why this works
+You’ll be able to ship with the current “small” (assets), and later let users download tiny/base and switch engines at runtime. Smaller models (tiny/base) are what will actually speed up the encoder on your device.
+The sources linked offer ready-to-use ONNX exports:
+sherpa-onnx’s tiny/base/… variants with tested encoder/decoder ONNX artifacts and tokens source.
+ONNX-community model trees on Hugging Face for tiny/base variants source, source.
+If you want, I can add:
+A ModelCatalog.kt (static list), a thin ModelDownloader using DownloadManager, and a simple “Model” setting to switch between “Small (built-in)” and “Tiny/Base (downloadable)”. This is low-risk and keeps your current engine intact until the sherpa engine is added.
+Implemented: reverted risky decoder changes; restored overlap as unused config; file-based model loading preference added in your engine.
+Next (optional, safe): add model catalog + downloader + model selection UI; later add a sherpa-compatible engine so tiny/base ONNX can run.
 
 **Implementation Based on WhisperIME:**
 - InputMethodService subclass
