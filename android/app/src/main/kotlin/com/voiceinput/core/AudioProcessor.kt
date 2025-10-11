@@ -91,17 +91,30 @@ class AudioProcessor(
 
     init {
         updateConfigurationValues()
-        initializeVAD()
+        // VAD initialization will happen in start() method to ensure proper timing
     }
 
     /**
      * Initialize Silero VAD (matching desktop silence detector initialization)
+     * FIXED: Now waits for VAD to be fully initialized to prevent first word loss
      */
-    private fun initializeVAD() {
+    private suspend fun initializeVAD() {
         try {
+            Log.i(TAG, "Initializing VAD...")
             sileroVAD = SileroVAD(context, config)
-            if (sileroVAD?.isInitialized() != true) {
-                Log.e(TAG, "Silence detector failed to initialize in AudioProcessor. VAD will not function.")
+            
+            // Wait for VAD to be fully initialized (with timeout)
+            var attempts = 0
+            val maxAttempts = 50 // 5 seconds max wait
+            while (sileroVAD?.isInitialized() != true && attempts < maxAttempts) {
+                kotlinx.coroutines.delay(100) // Wait 100ms
+                attempts++
+            }
+            
+            if (sileroVAD?.isInitialized() == true) {
+                Log.i(TAG, "✅ VAD fully initialized and ready")
+            } else {
+                Log.e(TAG, "❌ VAD initialization timeout - VAD will not function properly")
                 // Allow graceful degradation (matching desktop behavior)
             }
         } catch (e: Exception) {
@@ -134,11 +147,18 @@ class AudioProcessor(
 
     /**
      * Start the audio processing pipeline (matching desktop start method)
+     * FIXED: Now ensures VAD is fully initialized before starting
      */
     suspend fun start(): Boolean {
         if (isRunning.getAndSet(true)) {
             Log.w(TAG, "AudioProcessor already running")
             return false
+        }
+
+        // Initialize VAD first (if not already done)
+        if (sileroVAD?.isInitialized() != true) {
+            Log.i(TAG, "VAD not ready, initializing now...")
+            initializeVAD()
         }
 
         // Reset timing and VAD buffer
@@ -214,10 +234,11 @@ class AudioProcessor(
         // Combine buffered leftover bytes with new audio data
         val combined = vadFrameBuffer + audioData
 
-        // If combined data is still too small for one frame, buffer it and return silence
+        // If combined data is still too small for one frame, buffer it and assume speech
+        // This prevents losing the first word when audio chunks are smaller than VAD frame size
         if (combined.size < vadFrameSize) {
             vadFrameBuffer = combined
-            return true // Assume silence until we have enough data
+            return false // Assume speech until we have enough data to make a proper decision
         }
 
         // Process all complete VAD frames

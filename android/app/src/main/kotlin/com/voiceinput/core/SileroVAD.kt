@@ -39,6 +39,11 @@ class SileroVAD(
     // State tensor for stateful RNN (shape [2, None, 128])
     private var stateState: OnnxTensor? = null
 
+    // State tracking for smarter logging
+    private var lastLogTime = 0L
+    private var consecutiveSpeechFrames = 0
+    private var lastSpeechState = false
+    
     // Configuration values (cached for performance)
     private var sampleRate: Int = config.audio.sampleRate
     private var vadThreshold: Float = config.audio.vadThreshold
@@ -186,10 +191,33 @@ class SileroVAD(
             // Apply threshold from config (matching desktop logic)
             val isSpeech = speechProb >= vadThreshold
 
-            // Only log speech detection (reduce log spam)
-            if (isSpeech) {
-                Log.d(TAG, "🎤 Speech detected: prob=${"%.3f".format(speechProb)}")
+            // Smart logging: only log significant state changes (reduce noise)
+            val currentTime = System.currentTimeMillis()
+            val timeSinceLastLog = currentTime - lastLogTime
+            
+            if (isSpeech != lastSpeechState) {
+                // Only log if it's a significant change (not micro-speech)
+                if (isSpeech) {
+                    Log.i(TAG, "🎤 Speech started: prob=${"%.3f".format(speechProb)}")
+                    consecutiveSpeechFrames = 1
+                } else {
+                    // Only log speech end if it was a significant duration
+                    if (consecutiveSpeechFrames >= 10) { // At least 300ms of speech
+                        Log.i(TAG, "🔇 Speech ended after ${consecutiveSpeechFrames} frames")
+                    }
+                    consecutiveSpeechFrames = 0
+                }
+                lastLogTime = currentTime
+            } else if (isSpeech && timeSinceLastLog > 3000) {
+                // Periodic update during speech: log every 3 seconds max
+                Log.d(TAG, "🎤 Speech continuing: prob=${"%.3f".format(speechProb)} (${consecutiveSpeechFrames} frames)")
+                lastLogTime = currentTime
             }
+            
+            if (isSpeech) {
+                consecutiveSpeechFrames++
+            }
+            lastSpeechState = isSpeech
 
             return@withContext !isSpeech // Return true if silent (i.e., not speech)
 
@@ -287,8 +315,6 @@ class SileroVAD(
             // The model should output updated state tensor
             if (result.size() >= 2) {
                 val newStateTensor = result.get(1) as OnnxTensor
-                val newStateShape = newStateTensor.info.shape
-
 
                 // For Silero VAD, we need exactly [2, 1, 128] shape for the state tensor
                 // The model might output this in different arrangements, so we need to handle it properly

@@ -24,7 +24,7 @@ import kotlin.coroutines.coroutineContext
  */
 class AudioRecorder(
     private val sampleRate: Int = 16000,
-    private val chunkSize: Int = 1024,  // Match VAD test chunk size that works
+    private val chunkSize: Int = 960,  // Align with VAD frame size to prevent first word loss
     private val channels: Int = 1
 ) {
 

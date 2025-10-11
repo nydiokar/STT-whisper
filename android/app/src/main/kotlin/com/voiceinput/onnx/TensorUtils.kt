@@ -114,11 +114,12 @@ object TensorUtils {
      * Assumes 16-bit PCM (2 bytes per sample), little-endian
      */
     fun convertPcmToFloatArray(audioData: ByteArray): FloatArray {
-        val floatArray = FloatArray(audioData.size / 2)
+        val audioSamples = audioData.size / 2
+        val floatArray = FloatArray(audioSamples)
         val byteBuffer = ByteBuffer.wrap(audioData).order(ByteOrder.LITTLE_ENDIAN)
 
-        for (i in floatArray.indices) {
-            // Convert 16-bit PCM to float [-1.0, 1.0]
+        // Convert PCM samples to normalized floats [-1.0, 1.0]
+        for (i in 0 until audioSamples) {
             val sample = byteBuffer.short.toFloat() / 32768.0f
             floatArray[i] = sample
         }

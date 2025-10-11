@@ -6,6 +6,8 @@
 
 ---
 
+VERY IMPORTANT - implement smaller models - base and tiny are available. 
+
 ## 1. Core Use Case
 
 ### Primary Interaction Model

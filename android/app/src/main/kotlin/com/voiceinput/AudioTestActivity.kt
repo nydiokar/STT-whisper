@@ -3,6 +3,7 @@ package com.voiceinput
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Bundle
+import android.util.Log
 import android.widget.Button
 import android.widget.TextView
 import android.widget.Toast
@@ -45,6 +46,7 @@ class AudioTestActivity : AppCompatActivity() {
 
     private var recordingJob: Job? = null
     private var isRecording = false
+    private var isInitialized = false
 
     companion object {
         private const val RECORD_AUDIO_PERMISSION_CODE = 1001
@@ -86,7 +88,7 @@ class AudioTestActivity : AppCompatActivity() {
         recordButton = Button(this).apply {
             text = "🎤 Start Recording (5 seconds)"
             isEnabled = false
-            setOnClickListener { toggleRecording() }
+            setOnClickListener { toggleProductionRecording() }
         }
         layout.addView(recordButton)
 
@@ -155,26 +157,6 @@ class AudioTestActivity : AppCompatActivity() {
         scrollView.addView(transcriptionText)
         layout.addView(scrollView)
 
-        // Instructions
-        layout.addView(TextView(this).apply {
-            text = """
-                Instructions:
-                1. Ensure microphone permissions are granted
-                2. Manual test: Click 'Start Recording' for 5-second test
-                3. VAD test: Click 'Test VAD Pipeline' for continuous detection
-                4. Synthetic test: Click 'Test VAD with Synthetic Audio' (no speaking required)
-                5. Performance test: Click 'Test Streaming Performance' for comprehensive analysis
-                6. Live Demo: Click 'Live JFK Demo' to see real-time file transcription
-                7. VAD will automatically detect speech and process it
-                8. Speak clearly and watch for automatic transcription
-
-                If VAD detects speech and transcribes correctly, Phase 3 is complete!
-            """.trimIndent()
-            textSize = 12f
-            setPadding(0, 24, 0, 0)
-            setTextColor(0xFF666666.toInt())
-        })
-
         setContentView(layout)
     }
 
@@ -221,6 +203,14 @@ class AudioTestActivity : AppCompatActivity() {
                     }
                 )
                 updateStatus("✅ VoiceInputPipeline with VAD initialized")
+                
+                // Mark initialization as complete
+                isInitialized = true
+                
+                // Re-enable buttons now that initialization is complete
+                runOnUiThread {
+                    enableButtons()
+                }
 
             } catch (e: Exception) {
                 updateStatus("❌ Initialization failed: ${e.message}")
@@ -261,35 +251,57 @@ class AudioTestActivity : AppCompatActivity() {
 
     private fun enableButtons() {
         recordButton.isEnabled = true
-        testPipelineButton.isEnabled = true
-        testVADButton.isEnabled = true
-        testStreamingButton.isEnabled = true
-        liveJFKButton.isEnabled = true
-        bareWhisperBenchButton.isEnabled = true
-        updateStatus("✅ Ready to test - Click a button to start")
-    }
-
-    private fun toggleRecording() {
-        if (isRecording) {
-            stopRecording()
+        // Only enable pipeline-dependent buttons if initialization is complete
+        if (isInitialized) {
+            testPipelineButton.isEnabled = true
+            testVADButton.isEnabled = true
+            testStreamingButton.isEnabled = true
+            liveJFKButton.isEnabled = true
+            bareWhisperBenchButton.isEnabled = true
+            updateStatus("✅ Ready to test - Click a button to start")
         } else {
-            startRecording()
+            testPipelineButton.isEnabled = false
+            testVADButton.isEnabled = false
+            testStreamingButton.isEnabled = false
+            liveJFKButton.isEnabled = false
+            bareWhisperBenchButton.isEnabled = false
+            updateStatus("⏳ Initializing components... Please wait")
         }
     }
 
-    private fun startRecording() {
+    private fun toggleProductionRecording() {
+        if (isRecording) {
+            stopProductionRecording()
+        } else {
+            startProductionRecording()
+        }
+    }
+
+    /**
+     * Production-style recording that matches how VoiceInputPipeline actually works:
+     * - NO delays or warm-up periods
+     * - Immediate start and collection (like desktop version)
+     * - Direct audioStream() collection (like VoiceInputPipeline.feedAudioToProcessor())
+     */
+    private fun startProductionRecording() {
         recordingJob = lifecycleScope.launch {
             try {
                 isRecording = true
-                recordButton.text = "🔴 Recording... (${5} seconds)"
+                recordButton.text = "🔴 Recording... (5s)"
                 updateStatus("🎤 Recording audio...")
-                transcriptionText.text = "Recording in progress..."
+                transcriptionText.text = "Recording..."
+
+                // Start recording immediately (like VoiceInputPipeline line 164)
+                if (!audioRecorder.start()) {
+                    updateStatus("❌ Failed to start recording")
+                    isRecording = false
+                    recordButton.text = "🎤 Start Recording (5 seconds)"
+                    return@launch
+                }
 
                 // Collect audio for 5 seconds
                 val audioData = mutableListOf<ByteArray>()
                 val startTime = System.currentTimeMillis()
-
-                audioRecorder.start()
 
                 audioRecorder.audioStream().collect { chunk ->
                     audioData.add(chunk)
@@ -328,24 +340,24 @@ class AudioTestActivity : AppCompatActivity() {
                     if (result.text.isNotEmpty()) {
                         transcriptionText.text = """
                             ✅ Transcription successful!
-
+                            
                             Text: "${result.text}"
                             Confidence: ${result.confidence}
                             Processing Time: ${result.processingTimeMs}ms
                         """.trimIndent()
-                        updateStatus("✅ Recording and transcription complete!")
+                        updateStatus("✅ Transcription complete")
                     } else {
-                        transcriptionText.text = "❌ No transcription result (model may be missing or audio too quiet)"
-                        updateStatus("⚠️ Transcription returned empty result")
+                        transcriptionText.text = "❌ Empty transcription"
+                        updateStatus("⚠️ No text detected")
                     }
                 }
 
             } catch (e: Exception) {
                 runOnUiThread {
                     transcriptionText.text = "❌ Error: ${e.message}"
-                    updateStatus("❌ Recording failed: ${e.message}")
+                    updateStatus("❌ Recording failed")
                 }
-                e.printStackTrace()
+                Log.e("AudioTest", "Recording error", e)
             } finally {
                 isRecording = false
                 runOnUiThread {
@@ -355,7 +367,7 @@ class AudioTestActivity : AppCompatActivity() {
         }
     }
 
-    private fun stopRecording() {
+    private fun stopProductionRecording() {
         recordingJob?.cancel()
         audioRecorder.stop()
         isRecording = false
@@ -364,6 +376,12 @@ class AudioTestActivity : AppCompatActivity() {
     }
 
     private fun testFullPipeline() {
+        if (!isInitialized) {
+            updateStatus("❌ Components not yet initialized. Please wait...")
+            Toast.makeText(this, "Please wait for initialization to complete", Toast.LENGTH_SHORT).show()
+            return
+        }
+        
         lifecycleScope.launch {
             try {
                 updateStatus("🧠 Testing VAD Pipeline...")
@@ -411,6 +429,12 @@ class AudioTestActivity : AppCompatActivity() {
     }
 
     private fun testVADWithSyntheticAudio() {
+        if (!isInitialized) {
+            updateStatus("❌ Components not yet initialized. Please wait...")
+            Toast.makeText(this, "Please wait for initialization to complete", Toast.LENGTH_SHORT).show()
+            return
+        }
+        
         lifecycleScope.launch {
             try {
                 updateStatus("🔬 Testing VAD with synthetic audio...")
@@ -646,6 +670,12 @@ class AudioTestActivity : AppCompatActivity() {
      * Test streaming performance with automated benchmarks
      */
     private fun testStreamingPerformance() {
+        if (!isInitialized) {
+            updateStatus("❌ Components not yet initialized. Please wait...")
+            Toast.makeText(this, "Please wait for initialization to complete", Toast.LENGTH_SHORT).show()
+            return
+        }
+        
         lifecycleScope.launch {
             try {
                 updateStatus("⚡ Running streaming performance test...")
@@ -736,6 +766,12 @@ class AudioTestActivity : AppCompatActivity() {
      * Test Live JFK Demo - Stream JFK audio through pipeline with real-time transcription
      */
     private fun testLiveJFKDemo() {
+        if (!isInitialized) {
+            updateStatus("❌ Components not yet initialized. Please wait...")
+            Toast.makeText(this, "Please wait for initialization to complete", Toast.LENGTH_SHORT).show()
+            return
+        }
+        
         lifecycleScope.launch {
             try {
                 updateStatus("🎬 Starting Live JFK Demo...")

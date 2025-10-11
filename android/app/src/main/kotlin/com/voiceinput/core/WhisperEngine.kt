@@ -71,6 +71,7 @@ class WhisperEngine(
     /**
      * Initialize from assets - matches old WhisperEngine API
      */
+    @Suppress("UNUSED_PARAMETER") // Kept for API compatibility with old WhisperEngine
     suspend fun initializeFromAssets(assetPath: String): Boolean = withContext(Dispatchers.IO) {
         // Note: assetPath is ignored - ONNX always loads from models/ directory
         // This is just for API compatibility with old WhisperEngine
@@ -230,6 +231,11 @@ class WhisperEngine(
         val startTime = System.currentTimeMillis()
         val audioDurationSec = audioData.size / (SAMPLE_RATE * 2).toFloat()
 
+        // Safety check for very large audio chunks
+        if (audioDurationSec > 30.0f) {
+            Log.w(TAG, "⚠️ Large audio chunk detected: ${audioDurationSec}s. This may cause memory issues.")
+        }
+
         Log.i(TAG, "")
         Log.i(TAG, "========================================")
         Log.i(TAG, "🎙️  STARTING TRANSCRIPTION")
@@ -265,10 +271,44 @@ class WhisperEngine(
             Log.d(TAG, "Step 2: Running encoder on APU...")
             val encodeTime = System.currentTimeMillis()
             val encoderInputs = mapOf("input_features" to melSpectrogram)
-            encoderOutputs = encoderSession!!.run(encoderInputs)
-            val encoderHiddenStates = encoderOutputs[0] as OnnxTensor
-            val encodeDuration = System.currentTimeMillis() - encodeTime
-            Log.i(TAG, "   ⚡ Encoding: ${encodeDuration}ms")
+            var encodeDuration: Long
+            
+            try {
+                encoderOutputs = encoderSession!!.run(encoderInputs)
+                encodeDuration = System.currentTimeMillis() - encodeTime
+                Log.i(TAG, "   ⚡ Encoding: ${encodeDuration}ms")
+            } catch (e: Exception) {
+                Log.e(TAG, "❌ APU encoder failed: ${e.message}", e)
+                Log.i(TAG, "🔄 Attempting CPU fallback...")
+                
+                // Create CPU-only encoder session as fallback
+                val encoderPath = "models/Whisper_encoder.onnx"
+                val sessionOptions = OrtSession.SessionOptions().apply {
+                    registerCustomOpLibrary(OrtxPackage.getLibraryPath())
+                    setCPUArenaAllocator(false) // Disable arena allocator for stability
+                    setMemoryPatternOptimization(false) // Disable memory optimization
+                    setOptimizationLevel(OrtSession.SessionOptions.OptLevel.BASIC_OPT)
+                    setSymbolicDimensionValue("batch_size", 1)
+                    // Explicitly avoid NNAPI for CPU fallback
+                }
+
+                val cpuEncoderSession = ortEnvironment!!.createSession(
+                    context.assets.open(encoderPath).readBytes(),
+                    sessionOptions
+                )
+
+                // Run encoder on CPU
+                val cpuEncodeTime = System.currentTimeMillis()
+                encoderOutputs = cpuEncoderSession.run(encoderInputs)
+                encodeDuration = System.currentTimeMillis() - cpuEncodeTime
+                Log.i(TAG, "   🖥️ CPU Encoding: ${encodeDuration}ms")
+                
+                // Cleanup CPU session
+                cpuEncoderSession.close()
+            }
+            
+            // Extract encoder hidden states (guaranteed non-null: set by either APU or CPU encoder above)
+            val encoderHiddenStates = encoderOutputs!!.get(0) as OnnxTensor
 
             // Step 4: Initialize KV cache
             Log.d(TAG, "Step 3: Initializing KV cache...")
@@ -384,11 +424,14 @@ class WhisperEngine(
                 isFirstIteration = false
             } else {
                 // Subsequent iterations - use previous decoder cache
+                // previousResult is guaranteed non-null here (set in previous iteration)
+                @Suppress("UNNECESSARY_NOT_NULL_ASSERTION")
+                val prevResult = previousResult!!
                 for (i in 0 until NUM_DECODER_LAYERS) {
                     decoderInputs["past_key_values.$i.decoder.key"] =
-                        previousResult!!.get("present.$i.decoder.key").get() as OnnxTensor
+                        prevResult.get("present.$i.decoder.key").get() as OnnxTensor
                     decoderInputs["past_key_values.$i.decoder.value"] =
-                        previousResult!!.get("present.$i.decoder.value").get() as OnnxTensor
+                        prevResult.get("present.$i.decoder.value").get() as OnnxTensor
                     decoderInputs["past_key_values.$i.encoder.key"] =
                         cacheInitResult.get("present.$i.encoder.key").get() as OnnxTensor
                     decoderInputs["past_key_values.$i.encoder.value"] =
@@ -405,13 +448,21 @@ class WhisperEngine(
 
             // Extract logits and find most likely token
             val logitsTensor = result.get("logits").get() as OnnxTensor
+            @Suppress("UNCHECKED_CAST") // ONNX model guarantees this shape
             val logits = logitsTensor.value as Array<Array<FloatArray>>
             val outputLogits = logits[0][0]
 
             currentToken = OnnxUtils.getIndexOfLargest(outputLogits)
 
-            // Add token after initial sequence
-            if (iteration > 4) {
+            // ✅ FIX: Collect ALL non-special tokens from any iteration
+            // The decoder outputs tokens at EVERY iteration, not just after forced prompts.
+            // Previously we skipped iterations 1-4, which threw away the first word!
+            val isSpecialToken = currentToken == START_TOKEN_ID || 
+                                 currentToken == ENGLISH_TOKEN_ID || 
+                                 currentToken == TRANSCRIBE_TOKEN_ID || 
+                                 currentToken == NO_TIMESTAMPS_TOKEN_ID
+            
+            if (!isSpecialToken && currentToken != EOS_TOKEN_ID) {
                 tokens.add(currentToken)
             }
 
@@ -444,6 +495,7 @@ class WhisperEngine(
             val detokenizerInputs = mapOf("sequences" to sequencesTensor)
             val detokenizerOutputs = detokenizerSession!!.run(detokenizerInputs)
 
+            @Suppress("UNCHECKED_CAST") // ONNX detokenizer guarantees string output
             val textResult = detokenizerOutputs.get(0).value as Array<Array<String>>
             val rawText = textResult[0][0]
 

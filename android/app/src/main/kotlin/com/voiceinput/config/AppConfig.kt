@@ -20,10 +20,10 @@ data class AudioConfig(
 
     // Voice Activity Detection settings
     val vadMode: String = "silero",
-    val vadThreshold: Float = 0.3f,  // Reasonable threshold for real speech
+    val vadThreshold: Float = 0.5f,  // Increased threshold to reduce micro-speech detections
     val silenceDurationSec: Float = 1.5f,  // Natural pause detection (reduced from 2.0s)
     val maxChunkDurationSec: Float = 20.0f,  // 20s chunks for proper Whisper context (FIXED: was 1s!)
-    val overlapDurationSec: Float = 3.0f,  // 3s overlap for maintaining context between chunks
+    val overlapDurationSec: Float = 3.0f,  // 3s overlap (unused; revert to spec default)
     val enableVAD: Boolean = false  // Disable VAD for now - focus on basic button recording
 ) {
     init {
