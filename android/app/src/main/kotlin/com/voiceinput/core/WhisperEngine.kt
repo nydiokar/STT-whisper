@@ -236,6 +236,12 @@ class WhisperEngine(
         Log.i(TAG, "   Audio: ${audioDurationSec}s (${audioData.size} bytes)")
         Log.i(TAG, "========================================")
 
+        // Declare all resources that need cleanup
+        var audioTensor: OnnxTensor? = null
+        var initOutputs: OrtSession.Result? = null
+        var encoderOutputs: OrtSession.Result? = null
+        var cacheInitResult: OrtSession.Result? = null
+
         try {
             // Step 1: Convert PCM to float array
             val audioFloats = TensorUtils.convertPcmToFloatArray(audioData)
@@ -243,14 +249,14 @@ class WhisperEngine(
             // Step 2: Run initializer (audio preprocessing + mel-spectrogram)
             Log.d(TAG, "Step 1: Running audio preprocessor...")
             val preOpTime = System.currentTimeMillis()
-            val audioTensor = OnnxTensor.createTensor(
+            audioTensor = OnnxTensor.createTensor(
                 ortEnvironment!!,
                 FloatBuffer.wrap(audioFloats),
                 longArrayOf(1, audioFloats.size.toLong())
             )
 
             val initInputs = mapOf("audio_pcm" to audioTensor)
-            val initOutputs = initSession!!.run(initInputs)
+            initOutputs = initSession!!.run(initInputs)
             val melSpectrogram = initOutputs[0] as OnnxTensor
             val preOpDuration = System.currentTimeMillis() - preOpTime
             Log.i(TAG, "   Preprocessing: ${preOpDuration}ms")
@@ -259,7 +265,7 @@ class WhisperEngine(
             Log.d(TAG, "Step 2: Running encoder on APU...")
             val encodeTime = System.currentTimeMillis()
             val encoderInputs = mapOf("input_features" to melSpectrogram)
-            val encoderOutputs = encoderSession!!.run(encoderInputs)
+            encoderOutputs = encoderSession!!.run(encoderInputs)
             val encoderHiddenStates = encoderOutputs[0] as OnnxTensor
             val encodeDuration = System.currentTimeMillis() - encodeTime
             Log.i(TAG, "   ⚡ Encoding: ${encodeDuration}ms")
@@ -268,7 +274,7 @@ class WhisperEngine(
             Log.d(TAG, "Step 3: Initializing KV cache...")
             val cacheTime = System.currentTimeMillis()
             val cacheInitInputs = mapOf("encoder_hidden_states" to encoderHiddenStates)
-            val cacheInitResult = cacheInitSession!!.run(cacheInitInputs)
+            cacheInitResult = cacheInitSession!!.run(cacheInitInputs)
             val cacheDuration = System.currentTimeMillis() - cacheTime
             Log.i(TAG, "   Cache init: ${cacheDuration}ms")
 
@@ -282,12 +288,6 @@ class WhisperEngine(
             // Step 6: Detokenize to text
             Log.d(TAG, "Step 5: Detokenizing...")
             val text = detokenize(tokens)
-
-            // Clean up
-            audioTensor.close()
-            initOutputs.close()
-            encoderOutputs.close()
-            cacheInitResult.close()
 
             val totalDuration = System.currentTimeMillis() - startTime
             val rtf = totalDuration / (audioDurationSec * 1000)
@@ -306,7 +306,7 @@ class WhisperEngine(
             Log.i(TAG, "   Text:            \"$text\"")
             Log.i(TAG, "========================================")
 
-            TranscriptionResult(
+            return@withContext TranscriptionResult(
                 text = text.trim(),
                 language = "en",
                 segments = emptyList(),
@@ -318,6 +318,12 @@ class WhisperEngine(
             Log.e(TAG, "❌ Transcription failed", e)
             e.printStackTrace()
             throw Exception("Transcription failed: ${e.message}", e)
+        } finally {
+            // Guaranteed cleanup - close each resource independently
+            try { audioTensor?.close() } catch (e: Exception) { Log.e(TAG, "Error closing audioTensor", e) }
+            try { initOutputs?.close() } catch (e: Exception) { Log.e(TAG, "Error closing initOutputs", e) }
+            try { encoderOutputs?.close() } catch (e: Exception) { Log.e(TAG, "Error closing encoderOutputs", e) }
+            try { cacheInitResult?.close() } catch (e: Exception) { Log.e(TAG, "Error closing cacheInitResult", e) }
         }
     }
 

@@ -5,6 +5,7 @@ import android.util.Log
 import com.voiceinput.config.AppConfig
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Complete voice input pipeline connecting all components with VAD
@@ -33,8 +34,8 @@ class VoiceInputPipeline(
     // Memory management coordination
     private val memoryManager = MemoryManager(context)
 
-    // State
-    private var isRunning = false
+    // State (using AtomicBoolean for thread-safety)
+    private val isRunning = AtomicBoolean(false)
     private var job: Job? = null
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
 
@@ -72,7 +73,7 @@ class VoiceInputPipeline(
             Log.w(TAG, "🟡 Pipeline memory warning - optimizing resources")
             // Could implement intelligent resource management here
             scope.launch {
-                if (!isRunning) {
+                if (!isRunning.get()) {
                     // If pipeline not running, suggest cleanup
                     Log.i(TAG, "Pipeline idle during memory warning - ready for cleanup")
                 }
@@ -82,7 +83,7 @@ class VoiceInputPipeline(
         memoryManager.setMemoryCriticalCallback {
             Log.e(TAG, "🔴 Pipeline memory critical - emergency measures")
             scope.launch {
-                if (isRunning) {
+                if (isRunning.get()) {
                     Log.w(TAG, "Critical memory during active pipeline - considering pause")
                     // Could implement emergency pause/resume here
                 }
@@ -141,7 +142,7 @@ class VoiceInputPipeline(
      * Start listening and transcribing with comprehensive memory monitoring
      */
     suspend fun startListening() {
-        if (isRunning) {
+        if (isRunning.getAndSet(true)) {
             Log.w(TAG, "Pipeline already running")
             return
         }
@@ -180,7 +181,7 @@ class VoiceInputPipeline(
 
         memoryManager.logMemoryStatus("After audio processor start")
 
-        isRunning = true
+        // isRunning already set to true via getAndSet() above
         accumulatedText = ""
 
         // Start feeding audio from recorder to processor
@@ -206,13 +207,12 @@ class VoiceInputPipeline(
      * @return Final accumulated text
      */
     suspend fun stopListening(): String {
-        if (!isRunning) {
+        if (!isRunning.getAndSet(false)) {
             return accumulatedText
         }
 
         memoryManager.logMemoryStatusImmediate("Before pipeline stop")
 
-        isRunning = false
         job?.cancelAndJoin()
 
         // Stop AudioProcessor (which will process any remaining buffered audio)
@@ -268,15 +268,14 @@ class VoiceInputPipeline(
         chunkSizeBytes: Int = 8000, // 0.25 seconds at 16kHz (more reasonable for mobile)
         delayMs: Long = 0L // PERFORMANCE: No delay - process as fast as possible
     ) {
-        if (isRunning) {
+        if (isRunning.getAndSet(true)) {
             Log.w(TAG, "Pipeline already running - cannot feed file audio")
             return
         }
 
         Log.i(TAG, "🎬 Starting file audio streaming: ${audioData.size} bytes in ${chunkSizeBytes}-byte chunks")
-        
+
         // Reset state for file processing
-        isRunning = true
         accumulatedText = ""
         transcriptionCount = 0
         totalProcessingTime = 0L
@@ -284,7 +283,7 @@ class VoiceInputPipeline(
         // Start AudioProcessor (but not AudioRecorder)
         if (!audioProcessor.start()) {
             Log.e(TAG, "Failed to start audio processor for file input")
-            isRunning = false
+            isRunning.set(false)
             return
         }
 
@@ -323,8 +322,8 @@ class VoiceInputPipeline(
         } finally {
             // Stop AudioProcessor
             audioProcessor.stop()
-            isRunning = false
-            
+            isRunning.set(false)
+
             Log.i(TAG, "🏁 File audio streaming completed. Final text: ${accumulatedText.length} chars")
             memoryManager.logMemoryStatus("After file audio processing complete")
         }
@@ -374,7 +373,7 @@ class VoiceInputPipeline(
         )
 
         return PipelineStatus(
-            isRunning = isRunning,
+            isRunning = isRunning.get(),
             isRecording = audioRecorder.isCurrentlyRecording(),
             accumulatedTextLength = accumulatedText.length,
             modelInfo = modelInfo,

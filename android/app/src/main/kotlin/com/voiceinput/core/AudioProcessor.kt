@@ -96,7 +96,7 @@ class AudioProcessor(
     private fun initializeVAD() {
         try {
             sileroVAD = SileroVAD(context, config)
-            if (!sileroVAD!!.isInitialized()) {
+            if (sileroVAD?.isInitialized() != true) {
                 Log.e(TAG, "Silence detector failed to initialize in AudioProcessor. VAD will not function.")
                 // Allow graceful degradation (matching desktop behavior)
             }

@@ -90,6 +90,9 @@ class SileroVAD(
             // Create ONNX session
             ortSession = ortEnvironment!!.createSession(modelBytes, sessionOptions)
 
+            // Validate model input/output shapes
+            validateModelShapes()
+
             // Initialize state tensor (shape [2, 1, 128])
             initializeStateTensor()
 
@@ -101,6 +104,54 @@ class SileroVAD(
             cleanup()
             initialized = false
             // Note: Not throwing exception to allow graceful degradation (matching desktop behavior)
+        }
+    }
+
+    /**
+     * Validate model input and output shapes to ensure compatibility
+     */
+    private fun validateModelShapes() {
+        val session = ortSession ?: throw IllegalStateException("ORT session not initialized")
+
+        try {
+            val inputInfo = session.inputInfo
+            val outputInfo = session.outputInfo
+
+            Log.i(TAG, "VAD Model validation:")
+            Log.i(TAG, "  Inputs: ${inputInfo.keys.joinToString()}")
+            Log.i(TAG, "  Outputs: ${outputInfo.keys.joinToString()}")
+
+            // Validate expected inputs exist
+            val requiredInputs = setOf("input", "sr", "state")
+            val actualInputs = inputInfo.keys
+
+            for (required in requiredInputs) {
+                if (required !in actualInputs) {
+                    Log.w(TAG, "⚠️ Model missing expected input: $required")
+                }
+            }
+
+            // Log input shapes for debugging
+            inputInfo.forEach { (name, info) ->
+                val tensorInfo = info.info as? TensorInfo
+                val shape = tensorInfo?.shape?.joinToString(", ") ?: "unknown"
+                val type = tensorInfo?.type ?: "unknown"
+                Log.d(TAG, "  Input '$name': shape=[$shape], type=$type")
+            }
+
+            // Log output shapes
+            outputInfo.forEach { (name, info) ->
+                val tensorInfo = info.info as? TensorInfo
+                val shape = tensorInfo?.shape?.joinToString(", ") ?: "unknown"
+                val type = tensorInfo?.type ?: "unknown"
+                Log.d(TAG, "  Output '$name': shape=[$shape], type=$type")
+            }
+
+            Log.i(TAG, "✓ Model shape validation complete")
+
+        } catch (e: Exception) {
+            Log.e(TAG, "Error during model shape validation: ${e.message}", e)
+            // Don't throw - just log the error and continue
         }
     }
 
@@ -414,19 +465,34 @@ class SileroVAD(
 
     /**
      * Clean up resources (called internally on initialization failure)
+     * Fixed: Each resource cleaned independently to prevent cascading failures
      */
     private fun cleanup() {
+        // Close state tensor independently
         try {
-            // Close state tensor
             stateState?.close()
-            stateState = null
-
-            ortSession?.close()
-            ortSession = null
-            ortEnvironment?.close()
-            ortEnvironment = null
         } catch (e: Exception) {
-            Log.e(TAG, "Error during cleanup: ${e.message}", e)
+            Log.e(TAG, "Error closing state tensor: ${e.message}", e)
+        } finally {
+            stateState = null
+        }
+
+        // Close session independently
+        try {
+            ortSession?.close()
+        } catch (e: Exception) {
+            Log.e(TAG, "Error closing ORT session: ${e.message}", e)
+        } finally {
+            ortSession = null
+        }
+
+        // Close environment independently
+        try {
+            ortEnvironment?.close()
+        } catch (e: Exception) {
+            Log.e(TAG, "Error closing ORT environment: ${e.message}", e)
+        } finally {
+            ortEnvironment = null
         }
     }
 }

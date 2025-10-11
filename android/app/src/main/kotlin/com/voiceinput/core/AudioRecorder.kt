@@ -189,12 +189,13 @@ class AudioRecorder(
      * @return ByteArray of audio data, or empty array if error
      */
     suspend fun readChunk(): ByteArray = withContext(Dispatchers.IO) {
-        if (!isRecording || audioRecord == null) {
+        val record = audioRecord
+        if (!isRecording || record == null) {
             return@withContext ByteArray(0)
         }
 
         val buffer = ByteArray(chunkSize)
-        val bytesRead = audioRecord!!.read(buffer, 0, buffer.size)
+        val bytesRead = record.read(buffer, 0, buffer.size)
 
         if (bytesRead > 0) {
             val chunk = buffer.copyOf(bytesRead)

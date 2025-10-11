@@ -347,7 +347,8 @@ class VoiceInputService : Service() {
         super.onDestroy()
         Log.i(TAG, "VoiceInputService destroyed")
 
-        serviceScope?.launch {
+        // Use runBlocking to ensure cleanup completes before service is destroyed
+        runBlocking {
             try {
                 // Stop transcription if running
                 if (isTranscribing) {
@@ -358,10 +359,11 @@ class VoiceInputService : Service() {
                 voicePipeline?.release()
                 memoryManager?.release()
 
-                serviceScope?.cancel()
-
             } catch (e: Exception) {
                 Log.e(TAG, "Error during service cleanup", e)
+            } finally {
+                // Cancel scope after cleanup completes
+                serviceScope?.cancel()
             }
         }
     }
