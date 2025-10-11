@@ -49,8 +49,8 @@ class AudioTestActivity : AppCompatActivity() {
     companion object {
         private const val RECORD_AUDIO_PERMISSION_CODE = 1001
 
-        // ⚡ CENTRAL MODEL CONFIGURATION - Change this to switch models for ALL tests
-        private const val WHISPER_MODEL = "tiny"  // Options: "tiny", "base"
+        // Model configuration (ONNX Runtime - always uses SMALL model)
+        // NOTE: Only Whisper SMALL ONNX model is available
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -187,20 +187,15 @@ class AudioTestActivity : AppCompatActivity() {
                 audioRecorder = AudioRecorder()
                 updateStatus("✅ AudioRecorder initialized")
 
-                // Initialize Whisper engine
-                whisperEngine = WhisperEngine(this@AudioTestActivity, modelName = WHISPER_MODEL)
+                // Initialize Whisper engine (ONNX Runtime)
+                whisperEngine = WhisperEngine(this@AudioTestActivity)
 
-                // Initialize Whisper from assets - use centralized model config
-                val modelPath = if (WHISPER_MODEL == "tiny") {
-                    "models/ggml-tiny-q5_1.bin"
-                } else {
-                    "models/ggml-$WHISPER_MODEL.en-q5_1.bin"
-                }
-                val success = whisperEngine.initializeFromAssets(modelPath)
+                // Initialize Whisper ONNX model
+                val success = whisperEngine.initialize()
                 if (success) {
-                    updateStatus("✅ WhisperEngine initialized with model from assets")
+                    updateStatus("✅ WhisperEngine initialized with ONNX model")
                 } else {
-                    updateStatus("❌ WhisperEngine failed to load model from assets")
+                    updateStatus("❌ WhisperEngine failed to load ONNX model")
                 }
 
                 // Initialize pipeline with VAD (Phase 3)
@@ -833,18 +828,18 @@ class AudioTestActivity : AppCompatActivity() {
     /**
      * 🔬 DEFINITIVE BARE WHISPER BENCHMARK
      *
-     * This is THE test to determine if whisper.cpp is configured correctly.
+     * This is THE test to determine if ONNX Whisper is configured correctly.
      * Tests ONLY: Audio → WhisperEngine → Result
      * NO: VAD, Streaming, Pipeline, or any other overhead
      *
-     * Expected results for base model on modern phone (6-8 cores):
-     * - Real-time factor: 0.5x - 1.0x (faster than or equal to real-time)
-     * - 11s JFK audio should process in ~5-11 seconds
+     * Expected results for SMALL ONNX model on Samsung devices with APU:
+     * - Real-time factor: 0.4x - 0.5x (faster than real-time)
+     * - 11s JFK audio should process in ~4-5 seconds
      *
-     * If slower than 2x real-time, something is wrong with:
-     * - Thread count
-     * - JNI parameters
-     * - Model file
+     * If slower than 1x real-time, something is wrong with:
+     * - ONNX Runtime initialization
+     * - NNAPI/APU acceleration
+     * - Model files
      * - Device performance
      */
     private fun runBareWhisperBenchmark() {
@@ -857,13 +852,13 @@ class AudioTestActivity : AppCompatActivity() {
                     ========================
 
                     Running definitive performance test...
-                    This tests ONLY whisper.cpp (no VAD, no streaming, no pipeline)
+                    This tests ONLY ONNX Whisper (no VAD, no streaming, no pipeline)
 
                     Testing with JFK audio file...
                 """.trimIndent()
 
                 val benchmark = BareWhisperBenchmark(this@AudioTestActivity)
-                val result = benchmark.benchmarkWithJFKAudio(WHISPER_MODEL)
+                val result = benchmark.benchmarkWithJFKAudio()
 
                 runOnUiThread {
                     if (result.success) {
@@ -909,9 +904,9 @@ class AudioTestActivity : AppCompatActivity() {
                             } else if (result.realTimeFactor < 1.0f) {
                                 """
                                 ✅ Excellent performance!
-                                whisper.cpp is configured correctly.
+                                ONNX Whisper with APU is configured correctly.
 
-                                Now you can safely add:
+                                Already integrated with:
                                 - VAD processing
                                 - Streaming mode
                                 - Full pipeline
@@ -919,14 +914,14 @@ class AudioTestActivity : AppCompatActivity() {
                             } else {
                                 """
                                 ✅ Performance is acceptable.
-                                whisper.cpp baseline is working.
+                                ONNX Whisper baseline is working.
 
-                                Adding VAD/streaming will add ~10-20% overhead.
+                                VAD/streaming adds ~10-20% overhead.
                                 """.trimIndent()
                             }}
 
                             ====================================
-                            Check logcat for detailed timings from whisper.cpp
+                            Check logcat for detailed timings from ONNX Whisper
                         """.trimIndent()
                         updateStatus("✅ Benchmark complete - See results above")
                     } else {

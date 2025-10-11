@@ -20,16 +20,14 @@ import java.nio.FloatBuffer
  * - Uses split encoder/decoder architecture for optimal memory usage
  * - Implements KV cache for efficient autoregressive decoding
  * - Supports NNAPI acceleration for MediaTek/Qualcomm/Exynos NPUs
- * - INT8 quantized models for 45x faster inference
+ * - INT8 quantized Whisper SMALL model (244M parameters)
  *
- * Expected performance on Samsung devices:
- * - RTF: 0.15-0.2x (45x faster than old whisper.cpp)
- * - Encode time: ~1.4s for 11s audio
- * - Total time: ~1.6s for 11s audio
+ * Performance on Samsung devices with MediaTek APU:
+ * - RTF: ~0.44x (faster than real-time)
+ * - 11s audio processes in ~4.8s
  */
 class WhisperEngine(
     private val context: Context,
-    private val modelSize: String = "small",  // "tiny", "base", or "small"
     private val language: String = "en"
 ) {
 
@@ -48,24 +46,9 @@ class WhisperEngine(
         private const val MAX_TOKENS = 445  // Maximum tokens per transcription
         private const val MAX_TOKENS_PER_SECOND = 30
 
-        // Cache dimensions (same for all model sizes)
+        // Cache dimensions
         private const val NUM_DECODER_LAYERS = 12
         private const val CACHE_DIM = 64
-
-        // Model parameters for display
-        private val MODEL_PARAMS = mapOf(
-            "tiny" to "39M params",
-            "base" to "74M params",
-            "small" to "244M params"
-        )
-    }
-
-    // Actual model size being used (normalized)
-    private val actualModelSize: String = when {
-        modelSize.contains("tiny") -> "tiny"
-        modelSize.contains("base") -> "base"
-        modelSize.contains("small") -> "small"
-        else -> "small"  // Default fallback
     }
 
     private var ortEnvironment: OrtEnvironment? = null
@@ -94,7 +77,7 @@ class WhisperEngine(
         try {
             Log.i(TAG, "========================================")
             Log.i(TAG, "🚀 Initializing ONNX Whisper Engine")
-            Log.i(TAG, "   Model Size: ${actualModelSize.uppercase()} (${MODEL_PARAMS[actualModelSize]})")
+            Log.i(TAG, "   Model: Whisper SMALL INT8 (244M params)")
             Log.i(TAG, "========================================")
 
             // Create ORT environment
@@ -113,9 +96,8 @@ class WhisperEngine(
             Log.i(TAG, "========================================")
             Log.i(TAG, "✅ ONNX Whisper Engine Ready")
             Log.i(TAG, "   Backend: NNAPI (Samsung AI Chip)")
-            Log.i(TAG, "   Model: Whisper ${actualModelSize.uppercase()} INT8")
-            Log.i(TAG, "   Parameters: ${MODEL_PARAMS[actualModelSize]}")
-            Log.i(TAG, "   Expected RTF: ${getExpectedRTF()}")
+            Log.i(TAG, "   Model: Whisper SMALL INT8")
+            Log.i(TAG, "   Expected RTF: ~0.40-0.50x")
             Log.i(TAG, "========================================")
 
             true
@@ -131,28 +113,16 @@ class WhisperEngine(
      */
     fun getModelInfo(): ModelInfo {
         return ModelInfo(
-            name = "whisper-${actualModelSize}-onnx",
-            path = "assets/models/${actualModelSize}/",
+            name = "whisper-small-onnx",
+            path = "assets/models/",
             language = "en",
             isInitialized = initialized,
             type = "ONNX Runtime (APU accelerated)"
         )
     }
 
-    /**
-     * Get expected RTF based on model size
-     */
-    private fun getExpectedRTF(): String {
-        return when (actualModelSize) {
-            "tiny" -> "0.15-0.2x"
-            "base" -> "0.25-0.35x"
-            "small" -> "0.40-0.50x"
-            else -> "0.40-0.50x"
-        }
-    }
-
     private fun loadInitSession() {
-        val initPath = "models/${actualModelSize}/Whisper_initializer.onnx"
+        val initPath = "models/Whisper_initializer.onnx"
         val sessionOptions = OrtSession.SessionOptions().apply {
             registerCustomOpLibrary(OrtxPackage.getLibraryPath())
             setCPUArenaAllocator(false)
@@ -167,7 +137,7 @@ class WhisperEngine(
     }
 
     private fun loadEncoderSession() {
-        val encoderPath = "models/${actualModelSize}/Whisper_encoder.onnx"
+        val encoderPath = "models/Whisper_encoder.onnx"
         val sessionOptions = OrtSession.SessionOptions().apply {
             registerCustomOpLibrary(OrtxPackage.getLibraryPath())
 
@@ -205,7 +175,7 @@ class WhisperEngine(
     }
 
     private fun loadCacheInitSession() {
-        val cachePath = "models/${actualModelSize}/Whisper_cache_initializer.onnx"
+        val cachePath = "models/Whisper_cache_initializer.onnx"
         val sessionOptions = OrtSession.SessionOptions().apply {
             registerCustomOpLibrary(OrtxPackage.getLibraryPath())
             setCPUArenaAllocator(false)
@@ -220,7 +190,7 @@ class WhisperEngine(
     }
 
     private fun loadDecoderSession() {
-        val decoderPath = "models/${actualModelSize}/Whisper_decoder.onnx"
+        val decoderPath = "models/Whisper_decoder.onnx"
         val sessionOptions = OrtSession.SessionOptions().apply {
             registerCustomOpLibrary(OrtxPackage.getLibraryPath())
             setCPUArenaAllocator(false)
@@ -235,7 +205,7 @@ class WhisperEngine(
     }
 
     private fun loadDetokenizerSession() {
-        val detokenizerPath = "models/${actualModelSize}/Whisper_detokenizer.onnx"
+        val detokenizerPath = "models/Whisper_detokenizer.onnx"
         val sessionOptions = OrtSession.SessionOptions().apply {
             registerCustomOpLibrary(OrtxPackage.getLibraryPath())
             setCPUArenaAllocator(false)

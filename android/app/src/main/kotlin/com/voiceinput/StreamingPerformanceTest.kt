@@ -72,9 +72,9 @@ class StreamingPerformanceTest(private val context: Context) {
     private suspend fun setupTestEnvironment() {
         Log.i(TAG, "Setting up test environment...")
 
-        // Initialize WhisperEngine
+        // Initialize WhisperEngine (ONNX Runtime)
         whisperEngine = WhisperEngine(context)
-        val initSuccess = whisperEngine!!.initializeFromAssets("models/ggml-base.en-q5_1.bin")
+        val initSuccess = whisperEngine!!.initialize()
 
         if (!initSuccess) {
             throw IllegalStateException("Failed to initialize Whisper engine for test")

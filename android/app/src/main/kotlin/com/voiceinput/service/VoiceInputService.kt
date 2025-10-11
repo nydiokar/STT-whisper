@@ -99,9 +99,9 @@ class VoiceInputService : Service() {
                 // Initialize audio recorder
                 audioRecorder = AudioRecorder()
 
-                // Initialize Whisper engine
+                // Initialize Whisper engine (ONNX Runtime)
                 whisperEngine = WhisperEngine(this@VoiceInputService)
-                val initSuccess = whisperEngine!!.initializeFromAssets("models/ggml-base.en-q5_1.bin")
+                val initSuccess = whisperEngine!!.initialize()
 
                 if (initSuccess) {
                     // Initialize voice pipeline
