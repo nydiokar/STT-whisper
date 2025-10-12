@@ -61,6 +61,7 @@ class AudioRecorder(
      * Initialize AudioRecord
      * @return true if initialization successful
      */
+    @android.annotation.SuppressLint("MissingPermission")
     fun initialize(): Boolean {
         return try {
             val channelConfig = if (channels == 1) {
@@ -71,6 +72,8 @@ class AudioRecorder(
 
             val bufferSize = getMinBufferSize()
 
+            // Permission is checked by the caller (IME or Activity)
+            // AudioRecord creation will throw SecurityException if permission is not granted
             audioRecord = AudioRecord(
                 AUDIO_SOURCE,
                 sampleRate,
@@ -89,6 +92,9 @@ class AudioRecorder(
                 audioRecord = null
                 false
             }
+        } catch (e: SecurityException) {
+            Log.e(TAG, "Permission denied for audio recording", e)
+            false
         } catch (e: Exception) {
             Log.e(TAG, "Failed to initialize AudioRecord", e)
             false

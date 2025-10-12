@@ -232,7 +232,12 @@ class HelpActivity : AppCompatActivity() {
             text = content
             textSize = 14f
             setTextColor(ContextCompat.getColor(this@HelpActivity, android.R.color.darker_gray))
-            lineHeight = (textSize * 1.5).toInt()
+            // lineHeight requires API 28, use setLineSpacing for compatibility
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+                lineHeight = (textSize * 1.5).toInt()
+            } else {
+                setLineSpacing(textSize * 0.5f, 1.0f)  // additive spacing for API < 28
+            }
         })
 
         card.addView(cardContent)

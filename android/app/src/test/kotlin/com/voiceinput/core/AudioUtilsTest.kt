@@ -33,9 +33,9 @@ class AudioUtilsTest {
         val bytes = AudioUtils.floatToBytes(floats)
 
         val buffer = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
-        assertEquals(32767, buffer.getShort(0))
-        assertEquals(0, buffer.getShort(2))
-        assertEquals(-32768, buffer.getShort(4))
+        assertEquals(32767.toShort(), buffer.getShort(0))
+        assertEquals(0.toShort(), buffer.getShort(2))
+        assertEquals((-32768).toShort(), buffer.getShort(4))
     }
 
     @Test

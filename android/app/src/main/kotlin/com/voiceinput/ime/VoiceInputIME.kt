@@ -9,6 +9,7 @@ import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.LifecycleRegistry
 import com.voiceinput.core.AudioRecorder
 import com.voiceinput.core.WhisperEngine
+import com.voiceinput.core.TextProcessor
 import com.voiceinput.config.ConfigRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -55,6 +56,7 @@ class VoiceInputIME : InputMethodService(), LifecycleOwner {
     // Voice processing components (lazy init to save memory)
     private var audioRecorder: AudioRecorder? = null
     private var whisperEngine: WhisperEngine? = null
+    private val textProcessor = TextProcessor()  // For filtering hallucinations
 
     // UI
     private var keyboardView: VoiceKeyboardView? = null
@@ -333,15 +335,21 @@ class VoiceInputIME : InputMethodService(), LifecycleOwner {
                                         return@collect
                                     }
                                     audioBuffer.add(chunk)
-                                    Log.d(TAG, "Buffered chunk: ${chunk.size}B (total: ${currentSize + chunk.size}B)")
+                                    // Removed excessive debug logging - was polluting logcat
+                                    // Log.d(TAG, "Buffered chunk: ${chunk.size}B (total: ${currentSize + chunk.size}B)")
                                 }
                             }
                         }
                     } catch (e: Exception) {
-                        Log.e(TAG, "Error collecting audio", e)
-                        serviceScope.launch {
-                            keyboardView?.showError("Recording error")
-                            isRecording = false
+                        // JobCancellationException is normal when stopping - not an error
+                        if (e is kotlinx.coroutines.CancellationException) {
+                            Log.d(TAG, "Audio collection cancelled (normal)")
+                        } else {
+                            Log.e(TAG, "Error collecting audio", e)
+                            serviceScope.launch {
+                                keyboardView?.showError("Recording error")
+                                isRecording = false
+                            }
                         }
                     }
                 }
@@ -387,12 +395,20 @@ class VoiceInputIME : InputMethodService(), LifecycleOwner {
                 
                 // Transcribe
                 val result = whisperEngine?.transcribe(audioData)
-                
+
                 if (result != null && result.text.isNotEmpty()) {
-                    val cleanText = result.text.trim()
-                    insertText(cleanText)
-                    keyboardView?.showSuccess("✓")
-                    Log.i(TAG, "Transcription successful: $cleanText")
+                    // Filter hallucinations and clean text
+                    val filteredText = textProcessor.filterHallucinations(result.text)
+
+                    if (filteredText.isEmpty() || !textProcessor.isValidUtterance(filteredText)) {
+                        // Filtered text is empty or invalid (e.g., just "[BLANK_AUDIO]")
+                        keyboardView?.showError("No speech detected")
+                        Log.i(TAG, "Transcription filtered out as hallucination: ${result.text}")
+                    } else {
+                        insertText(filteredText)
+                        keyboardView?.showSuccess("✓")
+                        Log.i(TAG, "Transcription successful: $filteredText")
+                    }
                 } else {
                     keyboardView?.showError("No speech detected")
                     Log.w(TAG, "Transcription returned empty")

@@ -46,7 +46,12 @@ class VoiceKeyboardView(context: Context) : LinearLayout(context) {
     private val previewText: TextView
 
     // Haptic feedback
-    private val vibrator: Vibrator? = context.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
+    private val vibrator: Vibrator? = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+        context.getSystemService(android.os.VibratorManager::class.java)?.defaultVibrator
+    } else {
+        @Suppress("DEPRECATION")
+        context.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
+    }
 
     // State
     private var currentState: KeyboardState = KeyboardState.READY
@@ -97,8 +102,10 @@ class VoiceKeyboardView(context: Context) : LinearLayout(context) {
 
         // Microphone button (main action)
         microphoneButton = Button(context).apply {
-            text = "🎤"
-            textSize = 48f
+            // Use vector drawable instead of emoji
+            setCompoundDrawablesWithIntrinsicBounds(0, R.drawable.ic_microphone, 0, 0)
+            compoundDrawablePadding = 0
+            text = ""  // No text, just icon
             setBackgroundColor(Color.parseColor("#4CAF50"))  // Green
             setTextColor(Color.WHITE)
             isEnabled = false  // Disabled until initialized
@@ -204,7 +211,6 @@ class VoiceKeyboardView(context: Context) : LinearLayout(context) {
             statusText.text = "Ready to speak"
             statusText.setTextColor(Color.parseColor("#333333"))
             microphoneButton.setBackgroundColor(Color.parseColor("#4CAF50"))
-            microphoneButton.text = "🎤"
             microphoneButton.isEnabled = true
             cancelButton.visibility = View.GONE
             previewText.visibility = View.GONE
@@ -217,7 +223,6 @@ class VoiceKeyboardView(context: Context) : LinearLayout(context) {
             statusText.text = "🔴 Recording... speak now"
             statusText.setTextColor(Color.parseColor("#F44336"))  // Red
             microphoneButton.setBackgroundColor(Color.parseColor("#F44336"))
-            microphoneButton.text = "🔴"
             cancelButton.visibility = View.VISIBLE
             previewText.visibility = View.GONE
         }
@@ -229,7 +234,6 @@ class VoiceKeyboardView(context: Context) : LinearLayout(context) {
             statusText.text = "⏳ Processing..."
             statusText.setTextColor(Color.parseColor("#FF9800"))  // Orange
             microphoneButton.setBackgroundColor(Color.parseColor("#FF9800"))
-            microphoneButton.text = "⏳"
             microphoneButton.isEnabled = false
             // ✅ FIX: Keep cancel button visible during processing
             cancelButton.visibility = View.VISIBLE
@@ -242,7 +246,6 @@ class VoiceKeyboardView(context: Context) : LinearLayout(context) {
             statusText.text = "❌ $message"
             statusText.setTextColor(Color.parseColor("#F44336"))
             microphoneButton.setBackgroundColor(Color.parseColor("#4CAF50"))
-            microphoneButton.text = "🎤"
             microphoneButton.isEnabled = true
             cancelButton.visibility = View.GONE
             previewText.visibility = View.GONE

@@ -72,13 +72,11 @@
                 android:resource="@xml/method" />
         </service>
 
-        <!-- Phase 5: Background transcription service (placeholder) -->
-        <!--
+        <!-- Phase 5: Background transcription service -->
         <service
-            android:name=".service.TranscriptionService"
+            android:name=".service.VoiceInputService"
             android:foregroundServiceType="microphone"
             android:exported="false" />
-        -->
 
     </application>
 

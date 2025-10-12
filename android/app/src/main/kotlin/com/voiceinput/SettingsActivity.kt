@@ -129,7 +129,10 @@ class SettingsActivity : AppCompatActivity() {
             setCardBackgroundColor(ContextCompat.getColor(this@SettingsActivity, android.R.color.white))
             isClickable = true
             isFocusable = true
-            foreground = ContextCompat.getDrawable(this@SettingsActivity, android.R.attr.selectableItemBackground)
+            // Get the selectable item background from theme attribute
+            val typedValue = android.util.TypedValue()
+            context.theme.resolveAttribute(android.R.attr.selectableItemBackground, typedValue, true)
+            foreground = ContextCompat.getDrawable(context, typedValue.resourceId)
             setOnClickListener { onClick() }
         }
 

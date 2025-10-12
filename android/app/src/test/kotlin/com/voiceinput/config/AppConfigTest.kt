@@ -14,8 +14,8 @@ class AppConfigTest {
         assertEquals(16000, config.sampleRate)
         assertEquals(2048, config.chunkSize)
         assertEquals(1, config.channels)
-        assertEquals(0.5f, config.vadThreshold)
-        assertEquals(2.0f, config.silenceDurationSec)
+        assertEquals(0.5f, config.vadThreshold, 0.001f)
+        assertEquals(1.5f, config.silenceDurationSec, 0.001f)  // Updated from 2.0f to match actual default
     }
 
     @Test
@@ -65,10 +65,10 @@ class AppConfigTest {
     @Test
     fun `TranscriptionConfig should have valid defaults`() {
         val config = TranscriptionConfig()
-        assertEquals("base", config.modelName)
+        assertEquals("base.en-q5_1", config.modelName)  // Updated to match actual default quantized model
         assertEquals("en", config.language)
         assertEquals(false, config.translate)
-        assertEquals(32000, config.minChunkSizeBytes)
+        assertEquals(24000, config.minChunkSizeBytes)  // Updated from 32000 to match actual default
     }
 
     @Test

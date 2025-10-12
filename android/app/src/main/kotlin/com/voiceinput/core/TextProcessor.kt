@@ -21,6 +21,7 @@ class TextProcessor(private val minWords: Int = 2) {
 
     // Hallucination patterns - common Whisper artifacts
     private val hallucinationPatterns = listOf(
+        // YouTube/Video patterns
         "thanks for watching",
         "thank you for watching",
         "don't forget to subscribe",
@@ -41,7 +42,26 @@ class TextProcessor(private val minWords: Int = 2) {
         "see you",
         "welcome",
         "hello everyone",
-        "hi everyone"
+        "hi everyone",
+
+        // Silence/blank audio patterns
+        "[blank_audio]",
+        "[blank audio]",
+        "[silence]",
+
+        // Music/sound effect patterns
+        "(upbeat music)",
+        "(music)",
+        "(music playing)",
+        "(background music)",
+        "(applause)",
+        "(laughter)",
+        "(audience chattering)",
+        "(audience laughing)",
+        "(audience applauding)",
+        "[music]",
+        "[applause]",
+        "[laughter]"
     )
 
     /**
