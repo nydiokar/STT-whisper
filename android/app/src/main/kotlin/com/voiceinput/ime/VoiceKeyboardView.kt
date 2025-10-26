@@ -53,10 +53,11 @@ class VoiceKeyboardView(
     var onModeToggled: ((Boolean) -> Unit)? = null  // Callback for mode change (tapMode)
     var onHapticChanged: ((Boolean) -> Unit)? = null
     var onSensitivityChanged: ((Float) -> Unit)? = null
+    var onOpenAppSettings: (() -> Unit)? = null
 
     // UI Components
     private val mainKeyboardLayout: LinearLayout  // Main keyboard content
-    private val settingsDrawer: SettingsDrawerView  // Settings panel
+    private var settingsDrawer: SettingsDrawerView? = null  // Settings panel
     private val statusText: TextView
     private val microphoneButton: Button
     private val audioVisualizer: AudioVisualizerView  // Audio waveform visualizer
@@ -196,6 +197,8 @@ class VoiceKeyboardView(
                 1f  // weight parameter
             )
             visibility = View.GONE  // Hidden by default
+            // Set initial sensitivity from preferences
+            sensitivity = preferencesManager.visualizerSensitivity
         }
         recordingArea.addView(audioVisualizer)
 
@@ -262,8 +265,7 @@ class VoiceKeyboardView(
                     isTapMode = true
                     onModeToggled?.invoke(true)
                     updateModeButtons()
-                    // Update settings drawer to match
-                    settingsDrawer.setMode(InputMode.TAP)
+                    // Settings drawer will sync when opened (loads current preferences)
                 }
             }
         }
@@ -286,8 +288,7 @@ class VoiceKeyboardView(
                     isTapMode = false
                     onModeToggled?.invoke(false)
                     updateModeButtons()
-                    // Update settings drawer to match
-                    settingsDrawer.setMode(InputMode.HOLD)
+                    // Settings drawer will sync when opened (loads current preferences)
                 }
             }
         }
@@ -304,7 +305,7 @@ class VoiceKeyboardView(
                 dpToPx(36)
             )
             setOnClickListener {
-                settingsDrawer.toggle()
+                settingsDrawer?.toggle()
             }
         }
         actionButtonsLayout.addView(settingsButton)
@@ -338,8 +339,14 @@ class VoiceKeyboardView(
                 this@VoiceKeyboardView.onHapticChanged?.invoke(enabled)
             }
             onSensitivityChanged = { sensitivity ->
+                // Update visualizer sensitivity
+                audioVisualizer.sensitivity = sensitivity
                 // Notify IME of sensitivity change
                 this@VoiceKeyboardView.onSensitivityChanged?.invoke(sensitivity)
+            }
+            onOpenAppSettings = {
+                // Notify IME to open app settings
+                this@VoiceKeyboardView.onOpenAppSettings?.invoke()
             }
         }
         addView(settingsDrawer)
@@ -511,7 +518,7 @@ class VoiceKeyboardView(
 
     fun isRecording(): Boolean = isCurrentlyRecording
 
-    fun setInputTypeInfo(isPassword: Boolean, isSingleLine: Boolean) {
+    fun setInputTypeInfo(_isPassword: Boolean, _isSingleLine: Boolean) {
         // Could adjust UI based on text field type
         // For now, just log
     }
@@ -536,9 +543,12 @@ class VoiceKeyboardView(
     }
 
     /**
-     * Perform haptic feedback for button press
+     * Perform haptic feedback for button press (if enabled)
      */
     private fun performHapticFeedback() {
+        // Check if haptic feedback is enabled
+        if (!preferencesManager.hapticEnabled) return
+
         try {
             vibrator?.let {
                 if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {

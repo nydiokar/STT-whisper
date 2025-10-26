@@ -43,6 +43,7 @@ class SettingsDrawerView(
     var onModeChanged: ((InputMode) -> Unit)? = null
     var onHapticChanged: ((Boolean) -> Unit)? = null
     var onSensitivityChanged: ((Float) -> Unit)? = null
+    var onOpenAppSettings: (() -> Unit)? = null
 
     // UI Components
     private val headerLayout: LinearLayout
@@ -53,6 +54,9 @@ class SettingsDrawerView(
     private val sensitivitySeekBar: SeekBar
     private val sensitivityLabel: TextView
     private val closeButton: Button
+    
+    // Store the listener so we can temporarily remove it
+    private var modeChangeListener: RadioGroup.OnCheckedChangeListener? = null
 
     init {
         orientation = VERTICAL
@@ -135,7 +139,8 @@ class SettingsDrawerView(
             ).apply {
                 bottomMargin = dpToPx(16)
             }
-            setOnCheckedChangeListener { _, checkedId ->
+            // Create and store the listener
+            modeChangeListener = RadioGroup.OnCheckedChangeListener { _, checkedId ->
                 val newMode = when (checkedId) {
                     tapRadioButton.id -> InputMode.TAP
                     holdRadioButton.id -> InputMode.HOLD
@@ -144,6 +149,7 @@ class SettingsDrawerView(
                 preferencesManager.defaultMode = newMode
                 onModeChanged?.invoke(newMode)
             }
+            setOnCheckedChangeListener(modeChangeListener)
         }
 
         tapRadioButton = RadioButton(context).apply {
@@ -247,7 +253,7 @@ class SettingsDrawerView(
                 LayoutParams.MATCH_PARENT,
                 LayoutParams.WRAP_CONTENT
             ).apply {
-                bottomMargin = dpToPx(8)
+                bottomMargin = dpToPx(16)
             }
             setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
                 override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
@@ -263,6 +269,36 @@ class SettingsDrawerView(
             })
         }
         addView(sensitivitySeekBar)
+
+        // Separator before app settings button
+        addView(View(context).apply {
+            setBackgroundColor(Color.parseColor("#404040"))
+            layoutParams = LayoutParams(
+                LayoutParams.MATCH_PARENT,
+                dpToPx(1)
+            ).apply {
+                bottomMargin = dpToPx(12)
+            }
+        })
+
+        // Button to open main app settings
+        val openAppButton = Button(context).apply {
+            text = "📱 Advanced Settings"
+            textSize = 14f
+            setBackgroundColor(Color.parseColor("#333333"))
+            setTextColor(Color.parseColor("#FFFFFF"))
+            layoutParams = LayoutParams(
+                LayoutParams.MATCH_PARENT,
+                dpToPx(44)
+            ).apply {
+                bottomMargin = dpToPx(8)
+            }
+            setOnClickListener {
+                onOpenAppSettings?.invoke()
+                hide()
+            }
+        }
+        addView(openAppButton)
 
         // Load saved preferences
         loadPreferences()
@@ -305,6 +341,9 @@ class SettingsDrawerView(
      */
     fun show() {
         if (visibility == View.VISIBLE) return
+
+        // Reload preferences to show current state
+        loadPreferences()
 
         visibility = View.VISIBLE
         alpha = 0f
@@ -357,7 +396,6 @@ class SettingsDrawerView(
      */
     fun setMode(mode: InputMode) {
         // Don't trigger callback when programmatically setting
-        val previousListener = modeRadioGroup.getOnCheckedChangeListener()
         modeRadioGroup.setOnCheckedChangeListener(null)
 
         when (mode) {
@@ -365,7 +403,7 @@ class SettingsDrawerView(
             InputMode.HOLD -> holdRadioButton.isChecked = true
         }
 
-        modeRadioGroup.setOnCheckedChangeListener(previousListener)
+        modeRadioGroup.setOnCheckedChangeListener(modeChangeListener)
     }
 
     // Utility function

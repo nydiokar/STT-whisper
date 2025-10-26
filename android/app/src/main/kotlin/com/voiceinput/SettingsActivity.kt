@@ -175,7 +175,7 @@ class SettingsActivity : AppCompatActivity() {
             }
             radius = dpToPx(8).toFloat()
             cardElevation = dpToPx(2).toFloat()
-            setCardBackgroundColor(ContextCompat.getColor(this@SettingsActivity, 0xFFF5F5F5.toInt()))
+            setCardBackgroundColor(0xFFF5F5F5.toInt())
         }
 
         val cardContent = LinearLayout(this).apply {

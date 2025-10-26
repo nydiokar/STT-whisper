@@ -1,5 +1,6 @@
 package com.voiceinput.ime
 
+import android.content.Intent
 import android.inputmethodservice.InputMethodService
 import android.view.View
 import android.view.inputmethod.EditorInfo
@@ -13,6 +14,7 @@ import com.voiceinput.core.TextProcessor
 import com.voiceinput.config.ConfigRepository
 import com.voiceinput.config.PreferencesManager
 import com.voiceinput.config.InputMode
+import com.voiceinput.SettingsActivity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -110,6 +112,7 @@ class VoiceInputIME : InputMethodService(), LifecycleOwner {
                 onModeToggled = { tapMode -> handleModeToggle(tapMode) }
                 onHapticChanged = { enabled -> handleHapticChanged(enabled) }
                 onSensitivityChanged = { sensitivity -> handleSensitivityChanged(sensitivity) }
+                onOpenAppSettings = { handleOpenAppSettings() }
                 setInputMode(isTapMode)
             }
         }
@@ -298,6 +301,18 @@ class VoiceInputIME : InputMethodService(), LifecycleOwner {
         // Preference already saved by SettingsDrawerView
         // Could update AudioVisualizerView settings here if needed
         // For now, sensitivity is applied on next recording
+    }
+
+    private fun handleOpenAppSettings() {
+        try {
+            val intent = Intent(this, SettingsActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            }
+            startActivity(intent)
+            Log.i(TAG, "Opened main app settings")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to open app settings", e)
+        }
     }
 
     // ============================================================================

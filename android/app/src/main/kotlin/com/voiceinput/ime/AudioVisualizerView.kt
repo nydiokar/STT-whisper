@@ -38,6 +38,9 @@ class AudioVisualizerView @JvmOverloads constructor(
     private var currentIndex = 0
     private var updateCounter = 0  // For slower updates
 
+    // Sensitivity: 0.0 (low) to 1.0 (high) - controls how sensitive visualizer is to audio
+    var sensitivity: Float = 0.5f
+
     init {
         setBackgroundColor(Color.TRANSPARENT)
     }
@@ -65,9 +68,11 @@ class AudioVisualizerView @JvmOverloads constructor(
 
         val rms = kotlin.math.sqrt(sum / (audioData.size / 2))
 
-        // Normalize to 0-1 range with increased sensitivity (divide by 16384 instead of 32768)
-        // This makes the bars more expressive
-        var normalized = min(rms / 16384.0, 1.0).toFloat()
+        // Normalize to 0-1 range with adjustable sensitivity
+        // Low sensitivity (0.0): divide by 32768 (only loud sounds show)
+        // High sensitivity (1.0): divide by 8192 (even quiet sounds show)
+        val divisor = 32768f - (sensitivity * 24576f)  // Interpolate between 32768 and 8192
+        var normalized = min(rms / divisor, 1.0).toFloat()
 
         // Apply minimum baseline so bars are always slightly visible
         normalized = kotlin.math.max(normalized, 0.05f)
