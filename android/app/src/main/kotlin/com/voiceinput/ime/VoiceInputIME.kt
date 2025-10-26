@@ -11,6 +11,8 @@ import com.voiceinput.core.AudioRecorder
 import com.voiceinput.core.WhisperEngine
 import com.voiceinput.core.TextProcessor
 import com.voiceinput.config.ConfigRepository
+import com.voiceinput.config.PreferencesManager
+import com.voiceinput.config.InputMode
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -58,13 +60,17 @@ class VoiceInputIME : InputMethodService(), LifecycleOwner {
     private var whisperEngine: WhisperEngine? = null
     private val textProcessor = TextProcessor()  // For filtering hallucinations
 
+    // Configuration
+    private lateinit var preferencesManager: PreferencesManager
+
     // UI
     private var keyboardView: VoiceKeyboardView? = null
 
     // State
     private var isInitialized = false
     private var isRecording = false
-    
+    private var isTapMode = true  // Will be loaded from preferences
+
     // Thread-safe audio buffer with size limits
     private val audioBufferMutex = kotlinx.coroutines.sync.Mutex()
     private val audioBuffer = mutableListOf<ByteArray>()
@@ -80,6 +86,13 @@ class VoiceInputIME : InputMethodService(), LifecycleOwner {
         super.onCreate()
         lifecycleRegistry.currentState = Lifecycle.State.CREATED
         Log.i(TAG, "IME service created")
+
+        // Initialize preferences manager
+        preferencesManager = PreferencesManager(this)
+
+        // Load saved mode preference
+        isTapMode = (preferencesManager.defaultMode == InputMode.TAP)
+        Log.i(TAG, "Loaded saved mode: ${if (isTapMode) "TAP" else "HOLD"}")
     }
 
     override fun onCreateInputView(): View {
@@ -89,11 +102,15 @@ class VoiceInputIME : InputMethodService(), LifecycleOwner {
         
         // ✅ FIX: Reuse existing view if available
         if (keyboardView == null) {
-            keyboardView = VoiceKeyboardView(this).apply {
+            keyboardView = VoiceKeyboardView(this, preferencesManager).apply {
                 onMicrophonePressed = { handleMicrophonePressed() }
                 onMicrophoneReleased = { handleMicrophoneReleased() }
+                onMicrophoneClicked = { handleMicrophoneClicked() }
                 onCancelPressed = { handleCancelPressed() }
-                onSettingsPressed = { handleSettingsPressed() }
+                onModeToggled = { tapMode -> handleModeToggle(tapMode) }
+                onHapticChanged = { enabled -> handleHapticChanged(enabled) }
+                onSensitivityChanged = { sensitivity -> handleSensitivityChanged(sensitivity) }
+                setInputMode(isTapMode)
             }
         }
 
@@ -244,22 +261,43 @@ class VoiceInputIME : InputMethodService(), LifecycleOwner {
         }
     }
 
+    private fun handleMicrophoneClicked() {
+        // Tap mode - toggle recording on/off
+        if (isRecording) {
+            // Already recording, stop it
+            stopRecording()
+        } else {
+            // Not recording, start it
+            startRecording()
+        }
+    }
+
     private fun handleCancelPressed() {
         if (isRecording) {
             cancelRecording()
         }
     }
 
-    private fun handleSettingsPressed() {
-        try {
-            val intent = android.content.Intent(this, com.voiceinput.SettingsActivity::class.java).apply {
-                addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            startActivity(intent)
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to open settings", e)
-            keyboardView?.showStatus("Settings unavailable")
-        }
+    private fun handleModeToggle(tapMode: Boolean) {
+        isTapMode = tapMode
+        Log.i(TAG, "Input mode changed to: ${if (isTapMode) "Tap" else "Hold"}")
+
+        // Save preference
+        val mode = if (tapMode) InputMode.TAP else InputMode.HOLD
+        preferencesManager.defaultMode = mode
+    }
+
+    private fun handleHapticChanged(enabled: Boolean) {
+        Log.i(TAG, "Haptic feedback ${if (enabled) "enabled" else "disabled"}")
+        // Preference already saved by SettingsDrawerView
+        // Could update runtime behavior here if needed
+    }
+
+    private fun handleSensitivityChanged(sensitivity: Float) {
+        Log.i(TAG, "Visualizer sensitivity changed to: $sensitivity")
+        // Preference already saved by SettingsDrawerView
+        // Could update AudioVisualizerView settings here if needed
+        // For now, sensitivity is applied on next recording
     }
 
     // ============================================================================
@@ -267,26 +305,26 @@ class VoiceInputIME : InputMethodService(), LifecycleOwner {
     // ============================================================================
 
     private fun startRecording() {
+        Log.i(TAG, "Starting recording")
+
+        // Validate audio recorder is ready
+        val recorder = audioRecorder
+        if (recorder == null) {
+            keyboardView?.showError("Audio not initialized")
+            return
+        }
+
+        // Set state and update UI immediately (before coroutine)
+        isRecording = true
+        recordingStartTime = System.currentTimeMillis()
+        keyboardView?.showRecordingState()
+
         serviceScope.launch {
             try {
-                Log.i(TAG, "Starting recording")
-                
-                // Validate audio recorder is ready
-                val recorder = audioRecorder
-                if (recorder == null) {
-                    keyboardView?.showError("Audio not initialized")
-                    return@launch
-                }
-                
-                isRecording = true
-                recordingStartTime = System.currentTimeMillis()
-                
                 // Clear previous audio safely
                 audioBufferMutex.withLock {
                     audioBuffer.clear()
                 }
-                
-                keyboardView?.showRecordingState()
                 
                 // Start audio recording
                 if (!recorder.start()) {
@@ -298,15 +336,15 @@ class VoiceInputIME : InputMethodService(), LifecycleOwner {
                     while (isRecording) {
                         val elapsed = (System.currentTimeMillis() - recordingStartTime) / 1000
                         val remaining = (MAX_RECORDING_DURATION_MS / 1000) - elapsed
-                        
+
                         if (elapsed >= (WARNING_DURATION_MS / 1000)) {
                             // Show warning in last 10 seconds
-                            keyboardView?.showStatus("🔴 Recording... ${remaining}s remaining")
+                            keyboardView?.showStatus("Recording • ${remaining}s left")
                         } else {
                             // Show elapsed time
-                            keyboardView?.showStatus("🔴 Recording... ${elapsed}s")
+                            keyboardView?.showStatus("Recording • ${elapsed}s")
                         }
-                        
+
                         kotlinx.coroutines.delay(1000)
                     }
                 }
@@ -317,14 +355,14 @@ class VoiceInputIME : InputMethodService(), LifecycleOwner {
                         recorder.audioStream().collect { chunk ->
                             // Check recording limits
                             val elapsed = System.currentTimeMillis() - recordingStartTime
-                            
+
                             if (elapsed > MAX_RECORDING_DURATION_MS) {
                                 Log.w(TAG, "Maximum recording duration reached (60s)")
                                 keyboardView?.showError("Max duration reached (60s)")
                                 stopRecording()
                                 return@collect
                             }
-                            
+
                             // Thread-safe buffer access with size limit
                             audioBufferMutex.withLock {
                                 if (isRecording) {
@@ -335,8 +373,9 @@ class VoiceInputIME : InputMethodService(), LifecycleOwner {
                                         return@collect
                                     }
                                     audioBuffer.add(chunk)
-                                    // Removed excessive debug logging - was polluting logcat
-                                    // Log.d(TAG, "Buffered chunk: ${chunk.size}B (total: ${currentSize + chunk.size}B)")
+
+                                    // Update visualizer with audio data
+                                    keyboardView?.updateAudioLevel(chunk)
                                 }
                             }
                         }

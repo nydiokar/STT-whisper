@@ -23,12 +23,15 @@ Real-time voice-to-text service with system-wide text insertion capabilities.
 - [Desktop Documentation](desktop/README.md)
 - [Installation Guide](docs/desktop/user_guide/README.md)
 
-### Android (Coming Soon)
+### Android
 System-wide voice keyboard (IME) bringing desktop-quality filtering to mobile.
 
-**Status**: 🚧 In Development
-- [Android Port Plan](ANDROID_PORT_PLAN.md)
-- [Quick Start Guide](QUICKSTART.md)
+**Status**: ✅ **IME Complete!**
+- Professional voice keyboard with dual modes (Tap/Hold)
+- Real-time audio visualizer
+- Advanced hallucination filtering
+- Cosmos-themed modern UI
+- See [Current Status](docs/CURRENT_STATUS_2025_10_26.md) for details
 
 ## 🚀 Quick Start
 
@@ -195,9 +198,9 @@ See [Android Port Plan](ANDROID_PORT_PLAN.md) - We're actively porting to Androi
 - [x] Comprehensive documentation
 
 ### In Progress 🚧
-- [ ] Android port (Phase 0-1)
-- [ ] Component migration to Kotlin
-- [ ] Android IME implementation
+- [ ] Android Settings & Configuration UI
+- [ ] Main app polish
+- [ ] Real-world testing in popular apps
 
 ### Planned 📋
 - [ ] iOS version
