@@ -90,7 +90,8 @@ class RecorderActivity : AppCompatActivity() {
 
     private fun createUI(): FrameLayout {
         val container = FrameLayout(this).apply {
-            setBackgroundColor(Color.parseColor("#0F0F1A"))
+            // Use cosmos gradient matching IME and MainActivity
+            setBackgroundResource(R.drawable.cosmos_gradient)
         }
 
         // Top bar with back button
@@ -112,7 +113,7 @@ class RecorderActivity : AppCompatActivity() {
             statusText = TextView(this@RecorderActivity).apply {
                 text = "Tap to record"
                 textSize = 18f
-                setTextColor(Color.GRAY)
+                setTextColor(Color.parseColor("#a0a0a0")) // Match MainActivity dimmer gray
                 gravity = Gravity.CENTER
             }
 
@@ -123,7 +124,7 @@ class RecorderActivity : AppCompatActivity() {
             transcriptionText = TextView(this@RecorderActivity).apply {
                 text = ""
                 textSize = 16f
-                setTextColor(Color.WHITE)
+                setTextColor(Color.parseColor("#e0e0e0")) // Match MainActivity light gray
                 gravity = Gravity.CENTER
                 setPadding(dpToPx(24), dpToPx(24), dpToPx(24), dpToPx(24))
                 visibility = View.GONE
@@ -148,7 +149,7 @@ class RecorderActivity : AppCompatActivity() {
         return LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setBackgroundColor(Color.parseColor("#1E1E2E"))
+            setBackgroundColor(Color.parseColor("#1a1a2e")) // Match MainActivity
             setPadding(dpToPx(16), dpToPx(12), dpToPx(16), dpToPx(12))
             layoutParams = FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -188,10 +189,10 @@ class RecorderActivity : AppCompatActivity() {
                 bottomMargin = dpToPx(32)
             }
 
-            // Outer circle
+            // Green circle when ready (matching IME ready state)
             background = android.graphics.drawable.GradientDrawable().apply {
                 shape = android.graphics.drawable.GradientDrawable.OVAL
-                setColor(Color.parseColor("#6BA3D1"))
+                setColor(Color.parseColor("#4CAF50")) // Green accent
             }
 
             // Mic icon
@@ -304,11 +305,10 @@ class RecorderActivity : AppCompatActivity() {
         statusText.text = "Recording..."
         statusText.setTextColor(Color.parseColor("#FF6B6B"))
 
-        // Change button to red square
+        // Change button to red circle (not square!) matching IME recording state
         recordButton.background = android.graphics.drawable.GradientDrawable().apply {
-            shape = android.graphics.drawable.GradientDrawable.RECTANGLE
-            setColor(Color.parseColor("#FF6B6B"))
-            cornerRadius = dpToPx(16).toFloat()
+            shape = android.graphics.drawable.GradientDrawable.OVAL
+            setColor(Color.parseColor("#f44336")) // Error red from spec
         }
 
         val recorder = audioRecorder ?: return
@@ -367,10 +367,10 @@ class RecorderActivity : AppCompatActivity() {
                             statusText.text = "No speech detected"
                         }
 
-                        // Reset button appearance
+                        // Reset button to green ready state
                         recordButton.background = android.graphics.drawable.GradientDrawable().apply {
                             shape = android.graphics.drawable.GradientDrawable.OVAL
-                            setColor(Color.parseColor("#6BA3D1"))
+                            setColor(Color.parseColor("#4CAF50"))
                         }
                     }
                 } else {
@@ -378,7 +378,7 @@ class RecorderActivity : AppCompatActivity() {
                         statusText.text = "No audio recorded"
                         recordButton.background = android.graphics.drawable.GradientDrawable().apply {
                             shape = android.graphics.drawable.GradientDrawable.OVAL
-                            setColor(Color.parseColor("#6BA3D1"))
+                            setColor(Color.parseColor("#4CAF50"))
                         }
                     }
                 }
@@ -426,7 +426,7 @@ class RecorderActivity : AppCompatActivity() {
 
         recordButton.background = android.graphics.drawable.GradientDrawable().apply {
             shape = android.graphics.drawable.GradientDrawable.OVAL
-            setColor(Color.parseColor("#6BA3D1"))
+            setColor(Color.parseColor("#4CAF50"))
         }
     }
 

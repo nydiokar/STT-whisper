@@ -17,6 +17,12 @@ import java.util.*
 
 /**
  * Main activity showing history of all voice notes
+ *
+ * Styling matches IME cosmos theme:
+ * - Background: cosmos_gradient (#0f0c29 → #302b63 → #24243e)
+ * - Cards: #1a1a2e with subtle glow
+ * - Text: #e0e0e0 (light gray)
+ * - Accent: #4CAF50 (green)
  */
 class MainActivity : AppCompatActivity() {
 
@@ -30,8 +36,10 @@ class MainActivity : AppCompatActivity() {
 
         repository = NotesRepository(this)
 
-        // Main container
-        val container = FrameLayout(this)
+        // Main container with cosmos gradient
+        val container = FrameLayout(this).apply {
+            setBackgroundResource(R.drawable.cosmos_gradient)
+        }
 
         // Top bar
         val topBar = createTopBar()
@@ -44,13 +52,17 @@ class MainActivity : AppCompatActivity() {
                 ViewGroup.LayoutParams.MATCH_PARENT
             ).apply {
                 topMargin = dpToPx(56) // Below top bar
+                bottomMargin = dpToPx(80) // Above FAB
             }
+            // No dividers - cards have spacing
+            setPadding(dpToPx(16), dpToPx(8), dpToPx(16), dpToPx(8))
+            clipToPadding = false
         }
 
         // Empty state view
         emptyView = createEmptyView()
 
-        // FAB for new note
+        // FAB for new note - green circle with mic icon
         val fab = createFab()
 
         container.addView(recyclerView)
@@ -72,7 +84,7 @@ class MainActivity : AppCompatActivity() {
         return LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setBackgroundColor(Color.parseColor("#1E1E2E"))
+            setBackgroundColor(Color.parseColor("#1a1a2e")) // Slightly lighter than bg
             setPadding(dpToPx(16), dpToPx(12), dpToPx(16), dpToPx(12))
             layoutParams = FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -81,11 +93,12 @@ class MainActivity : AppCompatActivity() {
                 gravity = Gravity.TOP
             }
 
-            // Title
+            // App title
             val title = TextView(this@MainActivity).apply {
-                text = "Voice Notes"
-                textSize = 20f
-                setTextColor(Color.WHITE)
+                text = "Voice Input"
+                textSize = 18f
+                setTextColor(Color.parseColor("#e0e0e0")) // Light gray
+                typeface = android.graphics.Typeface.DEFAULT_BOLD
                 layoutParams = LinearLayout.LayoutParams(
                     0,
                     ViewGroup.LayoutParams.WRAP_CONTENT,
@@ -126,22 +139,32 @@ class MainActivity : AppCompatActivity() {
                 gravity = Gravity.CENTER
             }
 
+            val title = TextView(this@MainActivity).apply {
+                text = "Voice Notes"
+                textSize = 22f
+                setTextColor(Color.parseColor("#e0e0e0"))
+                typeface = android.graphics.Typeface.DEFAULT_BOLD
+                gravity = Gravity.CENTER
+                setPadding(0, dpToPx(24), 0, dpToPx(8))
+            }
+
             val message = TextView(this@MainActivity).apply {
                 text = "No voice notes yet"
-                textSize = 18f
-                setTextColor(Color.GRAY)
+                textSize = 16f
+                setTextColor(Color.parseColor("#a0a0a0")) // Dimmer gray
                 gravity = Gravity.CENTER
-                setPadding(0, dpToPx(16), 0, dpToPx(8))
+                setPadding(0, 0, 0, dpToPx(8))
             }
 
             val hint = TextView(this@MainActivity).apply {
                 text = "Tap + to record your first note"
                 textSize = 14f
-                setTextColor(Color.LTGRAY)
+                setTextColor(Color.parseColor("#808080")) // Even dimmer
                 gravity = Gravity.CENTER
             }
 
             addView(icon)
+            addView(title)
             addView(message)
             addView(hint)
         }
@@ -149,28 +172,25 @@ class MainActivity : AppCompatActivity() {
 
     private fun createFab(): FrameLayout {
         return FrameLayout(this).apply {
-            setBackgroundColor(Color.parseColor("#6BA3D1"))
-            layoutParams = FrameLayout.LayoutParams(
-                dpToPx(56),
-                dpToPx(56)
-            ).apply {
+            val size = dpToPx(56)
+            layoutParams = FrameLayout.LayoutParams(size, size).apply {
                 gravity = Gravity.BOTTOM or Gravity.END
                 rightMargin = dpToPx(24)
                 bottomMargin = dpToPx(24)
             }
 
-            // Rounded corners
+            // Green circle (matching IME ready state)
             clipToOutline = true
             outlineProvider = android.view.ViewOutlineProvider.BACKGROUND
             background = android.graphics.drawable.GradientDrawable().apply {
                 shape = android.graphics.drawable.GradientDrawable.OVAL
-                setColor(Color.parseColor("#6BA3D1"))
+                setColor(Color.parseColor("#4CAF50")) // Green accent
             }
 
-            val plusIcon = TextView(this@MainActivity).apply {
-                text = "+"
-                textSize = 32f
-                setTextColor(Color.WHITE)
+            // Mic icon
+            val micIcon = TextView(this@MainActivity).apply {
+                text = "🎤"
+                textSize = 28f
                 gravity = Gravity.CENTER
                 layoutParams = FrameLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
@@ -178,7 +198,7 @@ class MainActivity : AppCompatActivity() {
                 )
             }
 
-            addView(plusIcon)
+            addView(micIcon)
 
             setOnClickListener {
                 startActivity(Intent(this@MainActivity, RecorderActivity::class.java))
@@ -204,10 +224,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun handleNoteAction(note: Note) {
-        // Show delete confirmation dialog
-        android.app.AlertDialog.Builder(this)
+        // Show delete confirmation dialog with cosmos theme
+        android.app.AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog)
             .setTitle("Delete Note")
-            .setMessage("Are you sure you want to delete this note?")
+            .setMessage("This cannot be undone.")
             .setPositiveButton("Delete") { _, _ ->
                 repository.deleteNote(note.id)
                 loadNotes()
@@ -224,6 +244,11 @@ class MainActivity : AppCompatActivity() {
 
 /**
  * RecyclerView adapter for displaying notes
+ *
+ * Cards styled to match IME:
+ * - Background: #1a1a2e
+ * - Subtle glow effect
+ * - Proper spacing
  */
 class NotesAdapter(
     private val notes: List<Note>,
@@ -237,59 +262,85 @@ class NotesAdapter(
         val previewText: TextView = view.findViewById(1)
         val timestampText: TextView = view.findViewById(2)
         val fullText: TextView = view.findViewById(3)
-        val actionsRow: LinearLayout = view.findViewById(4)
+        val metadataText: TextView = view.findViewById(4)
+        val actionsRow: LinearLayout = view.findViewById(5)
     }
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): NoteViewHolder {
         val container = LinearLayout(parent.context).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.parseColor("#1E1E2E"))
+            // Card background matching IME
+            setBackgroundColor(Color.parseColor("#1a1a2e"))
+
+            // Add subtle glow effect
+            elevation = parent.context.resources.displayMetrics.density * 4
+
+            // Rounded corners
+            clipToOutline = true
+            outlineProvider = object : android.view.ViewOutlineProvider() {
+                override fun getOutline(view: View, outline: android.graphics.Outline) {
+                    outline.setRoundRect(0, 0, view.width, view.height, dpToPx(8).toFloat())
+                }
+            }
+
             setPadding(dpToPx(16), dpToPx(12), dpToPx(16), dpToPx(12))
             layoutParams = RecyclerView.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
             ).apply {
-                bottomMargin = dpToPx(8)
+                bottomMargin = dpToPx(12) // Space between cards
             }
         }
 
         // Preview text (first 60 chars)
         val preview = TextView(parent.context).apply {
             id = 1
-            textSize = 16f
-            setTextColor(Color.WHITE)
+            textSize = 15f
+            setTextColor(Color.parseColor("#e0e0e0")) // Light gray
             maxLines = 2
+            setLineSpacing(dpToPx(2).toFloat(), 1f)
         }
 
         // Timestamp
         val timestamp = TextView(parent.context).apply {
             id = 2
             textSize = 12f
-            setTextColor(Color.GRAY)
-            setPadding(0, dpToPx(4), 0, 0)
+            setTextColor(Color.parseColor("#a0a0a0")) // Dimmer gray
+            setPadding(0, dpToPx(6), 0, 0)
         }
 
         // Full text (hidden by default)
         val fullText = TextView(parent.context).apply {
             id = 3
-            textSize = 16f
-            setTextColor(Color.WHITE)
+            textSize = 15f
+            setTextColor(Color.parseColor("#e0e0e0"))
             visibility = View.GONE
             setPadding(0, dpToPx(8), 0, 0)
+            setLineSpacing(dpToPx(2).toFloat(), 1f)
+        }
+
+        // Metadata (char count + duration) - hidden by default
+        val metadata = TextView(parent.context).apply {
+            id = 4
+            textSize = 11f
+            setTextColor(Color.parseColor("#808080"))
+            visibility = View.GONE
+            setPadding(0, dpToPx(6), 0, 0)
         }
 
         // Actions row (hidden by default)
         val actionsRow = LinearLayout(parent.context).apply {
-            id = 4
+            id = 5
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.END
             visibility = View.GONE
-            setPadding(0, dpToPx(8), 0, 0)
+            setPadding(0, dpToPx(12), 0, 0)
         }
 
         container.addView(preview)
         container.addView(timestamp)
         container.addView(fullText)
+        container.addView(metadata)
         container.addView(actionsRow)
 
         return NoteViewHolder(container)
@@ -304,6 +355,9 @@ class NotesAdapter(
             holder.previewText.visibility = View.GONE
             holder.fullText.visibility = View.VISIBLE
             holder.fullText.text = note.text
+            holder.metadataText.visibility = View.VISIBLE
+            holder.metadataText.text = "${note.charCount} chars" +
+                if (note.durationSec != null) " • ${note.durationSec} sec" else ""
             holder.actionsRow.visibility = View.VISIBLE
 
             // Add action buttons if not already added
@@ -318,6 +372,7 @@ class NotesAdapter(
         } else {
             holder.previewText.visibility = View.VISIBLE
             holder.fullText.visibility = View.GONE
+            holder.metadataText.visibility = View.GONE
             holder.actionsRow.visibility = View.GONE
 
             val preview = if (note.text.length > 60) {
@@ -346,10 +401,23 @@ class NotesAdapter(
     private fun createActionButton(context: android.content.Context, text: String, onClick: () -> Unit): TextView {
         return TextView(context).apply {
             this.text = text
-            textSize = 14f
-            setTextColor(Color.parseColor("#6BA3D1"))
-            setPadding(dpToPx(12), dpToPx(8), dpToPx(12), dpToPx(8))
+            textSize = 13f
+            setTextColor(Color.parseColor("#4CAF50")) // Green accent
+            setPadding(dpToPx(16), dpToPx(8), dpToPx(16), dpToPx(8))
             setOnClickListener { onClick() }
+
+            // Button background
+            background = android.graphics.drawable.GradientDrawable().apply {
+                setColor(Color.parseColor("#2a2a3e")) // Slightly lighter than card
+                cornerRadius = dpToPx(4).toFloat()
+            }
+
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                leftMargin = dpToPx(8)
+            }
         }
     }
 
