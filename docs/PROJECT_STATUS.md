@@ -60,7 +60,23 @@ A voice-to-text Android app using **ONNX Runtime with Samsung AI chip accelerati
 - `android/app/src/main/kotlin/com/voiceinput/core/AudioProcessor.kt` - VAD + buffering
 - `android/app/src/main/kotlin/com/voiceinput/core/VoiceInputPipeline.kt` - Full pipeline
 - `android/app/src/main/kotlin/com/voiceinput/core/SileroVAD.kt` - Voice activity detection
-- `android/app/src/main/kotlin/com/voiceinput/core/TextProcessor.kt` - Hallucination filtering
+- `android/app/src/main/kotlin/com/voiceinput/core/TextProcessor.kt` - Hallucination filtering + smart formatting
+
+### IME (Input Method)
+- `android/app/src/main/kotlin/com/voiceinput/ime/VoiceInputIME.kt` - Main IME service (609 lines)
+- `android/app/src/main/kotlin/com/voiceinput/ime/VoiceKeyboardView.kt` - Keyboard UI (465+ lines)
+- `android/app/src/main/kotlin/com/voiceinput/ime/AudioVisualizerView.kt` - Waveform display (97 lines)
+- `android/app/src/main/kotlin/com/voiceinput/ime/SettingsDrawerView.kt` - Inline settings (383 lines)
+
+### Main App (v1.2)
+- `android/app/src/main/kotlin/com/voiceinput/MainActivity.kt` - Note history UI (359 lines)
+- `android/app/src/main/kotlin/com/voiceinput/RecorderActivity.kt` - Standalone recording (373 lines)
+- `android/app/src/main/kotlin/com/voiceinput/SettingsActivity.kt` - App settings (215 lines)
+- `android/app/src/main/kotlin/com/voiceinput/data/Note.kt` - Note data class
+- `android/app/src/main/kotlin/com/voiceinput/data/NotesRepository.kt` - Data persistence (SharedPreferences + Gson)
+
+### Configuration
+- `android/app/src/main/kotlin/com/voiceinput/config/PreferencesManager.kt` - User preferences (103 lines)
 
 ### Helpers
 - `android/app/src/main/kotlin/com/voiceinput/onnx/TensorUtils.kt` - ONNX tensor operations
@@ -68,8 +84,6 @@ A voice-to-text Android app using **ONNX Runtime with Samsung AI chip accelerati
 
 ### Testing
 - `android/app/src/main/kotlin/com/voiceinput/BareWhisperBenchmark.kt` - Performance benchmark
-- `android/app/src/main/kotlin/com/voiceinput/StreamingPerformanceTest.kt` - Pipeline test
-- `android/app/src/main/kotlin/com/voiceinput/AudioTestActivity.kt` - UI testing
 
 ### Models (assets/models/)
 - `Whisper_initializer.onnx` (71 KB)
@@ -148,7 +162,7 @@ Transformed app into a **production-quality system keyboard (IME)** that works i
 
 See `CURRENT_STATUS_2025_10_26.md` and `SETTINGS_IMPLEMENTATION_COMPLETE.md` for complete details.
 
-## 🚀 Current Phase: v1.1 COMPLETE - Choose Next Direction
+## 🚀 Current Phase: v1.2 COMPLETE - MainActivity MVP Ready!
 
 ### What's Done ✅
 1. ✅ IME core functionality (v1.0)
@@ -158,6 +172,42 @@ See `CURRENT_STATUS_2025_10_26.md` and `SETTINGS_IMPLEMENTATION_COMPLETE.md` for
 5. ✅ Smart formatting (v1.1)
 6. ✅ Custom vocabulary (v1.1)
 7. ✅ Essential editing buttons (v1.1)
+8. ✅ **MainActivity with note history** (v1.2)
+9. ✅ **RecorderActivity for standalone recording** (v1.2)
+10. ✅ **Auto-save from IME** (v1.2)
+
+### v1.2 Features (NEW!)
+
+**MainActivity (Note History):**
+- Displays all saved voice notes in reverse chronological order
+- Tap to expand/collapse full text (preview shows first 60 chars)
+- Copy notes to clipboard
+- Delete notes with confirmation dialog
+- Empty state with helpful instructions
+- FAB (+) button launches RecorderActivity
+- Settings button for quick access
+- Auto-refreshes when returning from RecorderActivity
+
+**RecorderActivity (Standalone Recording):**
+- Full-screen recording interface
+- Large circular button (tap to start/stop)
+- Visual feedback (button becomes red square when recording)
+- Real-time transcription display
+- Save/Discard actions after recording
+- Back navigation to MainActivity
+- Tracks recording duration
+
+**Auto-Save System:**
+- IME automatically saves all successful transcriptions
+- Recording duration tracked
+- Character count stored
+- Source marked as "stt" (vs "manual")
+- Silent background save (no user interruption)
+
+**Data Layer:**
+- `Note` data class (id, text, timestamps, source, charCount, durationSec)
+- `NotesRepository` with SharedPreferences + Gson
+- Full CRUD: save, get, update, delete, search, clear
 
 ### What's Next (3 Options)
 
@@ -168,13 +218,15 @@ See `CURRENT_STATUS_2025_10_26.md` and `SETTINGS_IMPLEMENTATION_COMPLETE.md` for
 - **Estimated:** 4-6 hours
 - **Benefit:** Better accuracy OR faster speed
 
-**Option 2: Build MainActivity (History + Storage)** 📱
-- Store all transcriptions automatically
-- View/search history
-- Copy/edit/delete past transcriptions
-- See `docs/android/FRONTEND_SPECS_SIMPLIFIED.md`
+**Option 2: Enhance MainActivity** 📱
+- Add search functionality
+- Manual note creation (text input)
+- Edit existing notes
+- Share notes to other apps
+- Export (CSV, TXT)
+- Sort/filter options
 - **Estimated:** 2-3 days
-- **Benefit:** Never lose transcriptions, searchable history
+- **Benefit:** More powerful note management
 
 **Option 3: Advanced Post-Processing** 🛠️
 - Voice commands ("comma", "period", "new line")
@@ -182,14 +234,8 @@ See `CURRENT_STATUS_2025_10_26.md` and `SETTINGS_IMPLEMENTATION_COMPLETE.md` for
 - Phone number formatting
 - Smart punctuation handling
 - See `docs/android/TESTING_REPORT_2025_10_26.md`
-- Estimated: 4-6 hours
-
-**Option 3: Advanced IME Features** ⚡
-- Voice commands ("new line", "comma")
-- Multi-language support
-- Custom Whisper prompts
-- Model selection (if more models available)
-- Estimated: 1-2 weeks
+- **Estimated:** 4-6 hours
+- **Benefit:** Better transcription quality
 
 ---
 
@@ -357,6 +403,9 @@ Most issues from old whisper.cpp are **not relevant** for ONNX, but keep in mind
 - [x] **Settings system COMPLETE!** 🎉
 - [x] **Real-world testing DONE!** 🎉
 - [x] **Production-ready IME!** 🚀
+- [x] **MainActivity with note history COMPLETE!** 🎉
+- [x] **RecorderActivity COMPLETE!** 🎉
+- [x] **Auto-save system COMPLETE!** 🎉
 
 ---
 
@@ -374,4 +423,4 @@ Most issues from old whisper.cpp are **not relevant** for ONNX, but keep in mind
 
 ---
 
-**IME is production-ready and tested! Ready for next phase! 🚀**
+**v1.2 is complete! Full app with IME keyboard + note history system! 🚀**

@@ -29,7 +29,7 @@ docs/
 
 ## 🎯 Current Status (Quick Summary)
 
-**Version:** 1.1 (IME Production-Ready)
+**Version:** 1.2 (Full App MVP)
 
 **What Works:**
 - ✅ Voice keyboard (IME) in any app
@@ -38,9 +38,12 @@ docs/
 - ✅ Custom vocabulary (personalized corrections)
 - ✅ Space + Backspace buttons
 - ✅ Settings (inline + app)
+- ✅ **MainActivity with note history**
+- ✅ **RecorderActivity for standalone recording**
+- ✅ **Auto-save from IME**
 
 **Next Steps:**
-- Build MainActivity (history + storage)
+- Enhance MainActivity (search, edit, share)
 - OR test different Whisper models
 - OR add voice commands
 

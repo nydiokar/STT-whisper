@@ -25,9 +25,9 @@
         android:hardwareAccelerated="true"
         android:requestLegacyExternalStorage="false">
 
-        <!-- Phase 2 Test: Audio + Transcription -->
+        <!-- Main Activity (Voice Notes History) -->
         <activity
-            android:name=".AudioTestActivity"
+            android:name=".MainActivity"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -35,15 +35,11 @@
             </intent-filter>
         </activity>
 
-        <!-- Phase 1 Test: Text Processing -->
+        <!-- Recorder Activity (Full-screen recording) -->
         <activity
-            android:name=".test.TestActivity"
-            android:exported="false" />
-
-        <!-- Placeholder MainActivity -->
-        <activity
-            android:name=".MainActivity"
-            android:exported="false" />
+            android:name=".RecorderActivity"
+            android:exported="false"
+            android:parentActivityName=".MainActivity" />
 
         <!-- Settings Activity for IME -->
         <activity

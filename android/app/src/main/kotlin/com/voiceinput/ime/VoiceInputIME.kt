@@ -14,6 +14,8 @@ import com.voiceinput.core.TextProcessor
 import com.voiceinput.config.ConfigRepository
 import com.voiceinput.config.PreferencesManager
 import com.voiceinput.config.InputMode
+import com.voiceinput.data.Note
+import com.voiceinput.data.NotesRepository
 import com.voiceinput.SettingsActivity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -64,6 +66,7 @@ class VoiceInputIME : InputMethodService(), LifecycleOwner {
 
     // Configuration
     private lateinit var preferencesManager: PreferencesManager
+    private lateinit var notesRepository: NotesRepository
 
     // UI
     private var keyboardView: VoiceKeyboardView? = null
@@ -89,8 +92,9 @@ class VoiceInputIME : InputMethodService(), LifecycleOwner {
         lifecycleRegistry.currentState = Lifecycle.State.CREATED
         Log.i(TAG, "IME service created")
 
-        // Initialize preferences manager
+        // Initialize preferences manager and repository
         preferencesManager = PreferencesManager(this)
+        notesRepository = NotesRepository(this)
 
         // Load saved mode preference
         isTapMode = (preferencesManager.defaultMode == InputMode.TAP)
@@ -484,6 +488,11 @@ class VoiceInputIME : InputMethodService(), LifecycleOwner {
                         Log.w(TAG, "⚠️ FILTERED OUT - Raw: \"$rawText\" | Processed: \"$processedText\" | Valid: ${textProcessor.isValidUtterance(processedText)}")
                     } else {
                         insertText(processedText)
+
+                        // Save to history
+                        val durationMs = System.currentTimeMillis() - recordingStartTime
+                        saveNoteToHistory(processedText, durationMs)
+
                         keyboardView?.showSuccess("✓")
                         Log.i(TAG, "✅ Inserted: \"$processedText\"")
                     }
@@ -601,6 +610,24 @@ class VoiceInputIME : InputMethodService(), LifecycleOwner {
         } catch (e: Exception) {
             Log.e(TAG, "Failed to insert text", e)
             keyboardView?.showError("Insert failed")
+        }
+    }
+
+    /**
+     * Save transcribed text to notes history
+     */
+    private fun saveNoteToHistory(text: String, durationMs: Long) {
+        try {
+            val note = Note(
+                text = text,
+                source = "stt",
+                durationSec = (durationMs / 1000).toInt()
+            )
+            notesRepository.saveNote(note)
+            Log.i(TAG, "Note saved to history (${note.charCount} chars)")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to save note to history", e)
+            // Don't show error to user - silent failure for background save
         }
     }
 
