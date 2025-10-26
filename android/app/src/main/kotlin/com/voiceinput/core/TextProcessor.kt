@@ -6,9 +6,19 @@ package com.voiceinput.core
  * This is a direct port of the Python TextProcessor from desktop/voice_input_service/utils/text_processor.py
  * The goal is to maintain identical behavior across platforms.
  *
+ * Processing Pipeline:
+ * 1. filterHallucinations() - Remove Whisper artifacts
+ * 2. formatStructuredData() - Convert spoken patterns to symbols (emails, URLs, etc.)
+ * 3. applyPunctuation() - Future: voice commands for punctuation
+ * 4. fixCapitalization() - Future: smart capitalization
+ *
  * @param minWords Minimum number of words to consider a valid utterance (default: 2)
+ * @param enableSmartFormatting Enable email/URL/phone formatting (default: true)
  */
-class TextProcessor(private val minWords: Int = 2) {
+class TextProcessor(
+    private val minWords: Int = 2,
+    private var enableSmartFormatting: Boolean = true
+) {
 
     companion object {
         // Maximum overlap length to prevent excessive searching
@@ -18,6 +28,21 @@ class TextProcessor(private val minWords: Int = 2) {
         // Pattern: [00:00:00.000 --> 00:00:05.000]
         private val TIMESTAMP_PATTERN = Regex("""\[\d{2}:\d{2}:\d{2}\.\d{3}\s+-->\s+\d{2}:\d{2}:\d{2}\.\d{3}\]\s*""")
     }
+
+    // Custom vocabulary corrections (personalized)
+    // Maps common misrecognitions to correct terms
+    private val customVocabulary = mapOf(
+        // Personal identifiers (GitHub username)
+        "nitiocard" to "Nydiokar",
+        "nydiokar" to "Nydiokar",  // Already correct but ensure capitalization
+        "need yocar" to "Nydiokar",
+        "need your car" to "Nydiokar",
+        "netiocard" to "Nydiokar",
+        "knitiocard" to "Nydiokar",
+
+        // Add more as you discover them
+        // "some wrong phrase" to "correct phrase"
+    )
 
     // Hallucination patterns - common Whisper artifacts
     private val hallucinationPatterns = listOf(
@@ -194,7 +219,16 @@ class TextProcessor(private val minWords: Int = 2) {
 
         if (cleanText.isEmpty()) return false
 
-        // Check word count
+        // Special case: If it contains @ or common TLDs, it's likely structured data (email/URL)
+        // and should be considered valid even if it's "one word"
+        if (cleanText.contains("@") ||
+            cleanText.contains(".com") ||
+            cleanText.contains(".org") ||
+            cleanText.contains(".net")) {
+            return true
+        }
+
+        // Check word count for regular text
         val wordCount = cleanText.split(Regex("""\s+""")).size
         return wordCount >= minWords
     }
@@ -359,5 +393,179 @@ class TextProcessor(private val minWords: Int = 2) {
 
             return "$result$separator$appendPart"
         }
+    }
+
+    /**
+     * Format structured data like emails, URLs, and phone numbers.
+     * Converts spoken patterns to their symbolic forms.
+     *
+     * Examples:
+     * - "john at gmail dot com" → "john@gmail.com"
+     * - "google dot com" → "google.com"
+     * - "www dot example dot org" → "www.example.org"
+     *
+     * @param text Text to format
+     * @return Text with structured data formatted
+     */
+    fun formatStructuredData(text: String): String {
+        if (!enableSmartFormatting || text.isEmpty()) return text
+
+        var result = text
+
+        // Apply email formatting
+        result = formatEmails(result)
+
+        // Apply URL formatting
+        result = formatURLs(result)
+
+        // Future: phone numbers, addresses, etc.
+
+        return result
+    }
+
+    /**
+     * Format email addresses from spoken form.
+     * Pattern: "word at word dot word" → "word@word.word"
+     */
+    private fun formatEmails(text: String): String {
+        var result = text
+
+        // Pattern: Look for sequences like "word at word dot com/org/net"
+        // Example: "contact me at john dot smith at gmail dot com"
+        val emailPattern = Regex(
+            """(\b[\w]+(?:\s+dot\s+[\w]+)*\s+at\s+[\w]+(?:\s+dot\s+[\w]+)+)""",
+            RegexOption.IGNORE_CASE
+        )
+
+        result = emailPattern.replace(result) { match ->
+            var email = match.value
+                .replace(Regex("""\s+at\s+""", RegexOption.IGNORE_CASE), "@")
+                .replace(Regex("""\s+dot\s+""", RegexOption.IGNORE_CASE), ".")
+                .replace(Regex("""\s+"""), "")  // Remove all remaining spaces
+            email
+        }
+
+        // Also handle simple patterns without context
+        // "john at gmail dot com" even if not in a sentence
+        result = result
+            .replace(Regex("""\bat\b""", RegexOption.IGNORE_CASE)) { "@" }
+            .replace(Regex("""\bdot\b""", RegexOption.IGNORE_CASE)) { "." }
+
+        // Clean up multiple spaces that may have been created
+        result = result.replace(Regex("""\s+"""), " ").trim()
+
+        return result
+    }
+
+    /**
+     * Format URLs from spoken form.
+     * Pattern: "www dot example dot com" → "www.example.com"
+     */
+    private fun formatURLs(text: String): String {
+        var result = text
+
+        // Pattern 1: URLs starting with www
+        // "www dot google dot com"
+        val wwwPattern = Regex(
+            """\bw+\s+w+\s+w+\s+dot\s+[\w]+(?:\s+dot\s+[\w]+)+""",
+            RegexOption.IGNORE_CASE
+        )
+
+        result = wwwPattern.replace(result) { match ->
+            match.value
+                .replace(Regex("""\bw+\s+w+\s+w+\b""", RegexOption.IGNORE_CASE), "www")
+                .replace(Regex("""\s+dot\s+""", RegexOption.IGNORE_CASE), ".")
+                .replace(Regex("""\s+"""), "")
+        }
+
+        // Pattern 2: Simple domain names
+        // "google dot com", "github dot io"
+        val domainPattern = Regex(
+            """\b[\w]+\s+dot\s+(?:com|org|net|edu|gov|io|co|uk|de|fr|jp|cn)\b""",
+            RegexOption.IGNORE_CASE
+        )
+
+        result = domainPattern.replace(result) { match ->
+            match.value
+                .replace(Regex("""\s+dot\s+""", RegexOption.IGNORE_CASE), ".")
+                .replace(Regex("""\s+"""), "")
+        }
+
+        // Pattern 3: URLs with protocol
+        // "https colon slash slash google dot com"
+        val protocolPattern = Regex(
+            """\b(https?|ftp)\s+colon\s+slash\s+slash\s+[\w]+(?:\s+dot\s+[\w]+)+""",
+            RegexOption.IGNORE_CASE
+        )
+
+        result = protocolPattern.replace(result) { match ->
+            match.value
+                .replace(Regex("""\s+colon\s+""", RegexOption.IGNORE_CASE), ":")
+                .replace(Regex("""\s+slash\s+""", RegexOption.IGNORE_CASE), "/")
+                .replace(Regex("""\s+dot\s+""", RegexOption.IGNORE_CASE), ".")
+                .replace(Regex("""\s+"""), "")
+        }
+
+        // Clean up
+        result = result.replace(Regex("""\s+"""), " ").trim()
+
+        return result
+    }
+
+    /**
+     * Apply custom vocabulary corrections.
+     * Replaces commonly misrecognized phrases with correct ones.
+     *
+     * Examples:
+     * - "nitiocard" → "Nydiokar"
+     * - "need yocar" → "Nydiokar"
+     */
+    private fun applyCustomVocabulary(text: String): String {
+        var result = text
+
+        // Apply case-insensitive replacements
+        for ((wrong, correct) in customVocabulary) {
+            // Replace whole word matches (with word boundaries)
+            val pattern = Regex("\\b$wrong\\b", RegexOption.IGNORE_CASE)
+            result = pattern.replace(result, correct)
+        }
+
+        return result
+    }
+
+    /**
+     * Process text through the full pipeline.
+     * Convenience method that applies all processing stages.
+     *
+     * @param rawText Raw transcription from Whisper
+     * @return Fully processed text ready for output
+     */
+    fun process(rawText: String): String {
+        if (rawText.isEmpty()) return ""
+
+        // Stage 1: Remove hallucinations
+        var text = filterHallucinations(rawText)
+        if (text.isEmpty()) return ""
+
+        // Stage 2: Apply custom vocabulary (personal corrections)
+        text = applyCustomVocabulary(text)
+
+        // Stage 3: Format structured data (emails, URLs)
+        text = formatStructuredData(text)
+
+        // Stage 4: Future - Apply punctuation commands
+        // text = applyPunctuation(text)
+
+        // Stage 5: Future - Fix capitalization
+        // text = fixCapitalization(text)
+
+        return text
+    }
+
+    /**
+     * Toggle smart formatting on/off at runtime.
+     */
+    fun setSmartFormattingEnabled(enabled: Boolean) {
+        enableSmartFormatting = enabled
     }
 }

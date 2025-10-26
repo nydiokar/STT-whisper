@@ -60,7 +60,7 @@ class VoiceInputIME : InputMethodService(), LifecycleOwner {
     // Voice processing components (lazy init to save memory)
     private var audioRecorder: AudioRecorder? = null
     private var whisperEngine: WhisperEngine? = null
-    private val textProcessor = TextProcessor()  // For filtering hallucinations
+    private val textProcessor = TextProcessor()  // For filtering hallucinations + smart formatting
 
     // Configuration
     private lateinit var preferencesManager: PreferencesManager
@@ -95,6 +95,10 @@ class VoiceInputIME : InputMethodService(), LifecycleOwner {
         // Load saved mode preference
         isTapMode = (preferencesManager.defaultMode == InputMode.TAP)
         Log.i(TAG, "Loaded saved mode: ${if (isTapMode) "TAP" else "HOLD"}")
+
+        // Configure text processor with smart formatting preference
+        textProcessor.setSmartFormattingEnabled(preferencesManager.smartFormattingEnabled)
+        Log.i(TAG, "Smart formatting: ${if (preferencesManager.smartFormattingEnabled) "enabled" else "disabled"}")
     }
 
     override fun onCreateInputView(): View {
@@ -113,6 +117,8 @@ class VoiceInputIME : InputMethodService(), LifecycleOwner {
                 onHapticChanged = { enabled -> handleHapticChanged(enabled) }
                 onSensitivityChanged = { sensitivity -> handleSensitivityChanged(sensitivity) }
                 onOpenAppSettings = { handleOpenAppSettings() }
+                onSpacePressed = { handleSpacePressed() }
+                onBackspacePressed = { handleBackspacePressed() }
                 setInputMode(isTapMode)
             }
         }
@@ -315,6 +321,18 @@ class VoiceInputIME : InputMethodService(), LifecycleOwner {
         }
     }
 
+    private fun handleSpacePressed() {
+        val ic = currentInputConnection ?: return
+        ic.commitText(" ", 1)
+        Log.d(TAG, "Space inserted")
+    }
+
+    private fun handleBackspacePressed() {
+        val ic = currentInputConnection ?: return
+        ic.deleteSurroundingText(1, 0)
+        Log.d(TAG, "Backspace pressed")
+    }
+
     // ============================================================================
     // Recording Control
     // ============================================================================
@@ -451,17 +469,23 @@ class VoiceInputIME : InputMethodService(), LifecycleOwner {
                 val result = whisperEngine?.transcribe(audioData)
 
                 if (result != null && result.text.isNotEmpty()) {
-                    // Filter hallucinations and clean text
-                    val filteredText = textProcessor.filterHallucinations(result.text)
+                    // Process through full pipeline: hallucinations + smart formatting
+                    val rawText = result.text
+                    val processedText = textProcessor.process(rawText)
 
-                    if (filteredText.isEmpty() || !textProcessor.isValidUtterance(filteredText)) {
-                        // Filtered text is empty or invalid (e.g., just "[BLANK_AUDIO]")
+                    // Log transformations for debugging
+                    if (rawText != processedText) {
+                        Log.i(TAG, "Text transformed: \"$rawText\" → \"$processedText\"")
+                    }
+
+                    if (processedText.isEmpty() || !textProcessor.isValidUtterance(processedText)) {
+                        // Filtered text is empty or invalid
                         keyboardView?.showError("No speech detected")
-                        Log.i(TAG, "Transcription filtered out as hallucination: ${result.text}")
+                        Log.w(TAG, "⚠️ FILTERED OUT - Raw: \"$rawText\" | Processed: \"$processedText\" | Valid: ${textProcessor.isValidUtterance(processedText)}")
                     } else {
-                        insertText(filteredText)
+                        insertText(processedText)
                         keyboardView?.showSuccess("✓")
-                        Log.i(TAG, "Transcription successful: $filteredText")
+                        Log.i(TAG, "✅ Inserted: \"$processedText\"")
                     }
                 } else {
                     keyboardView?.showError("No speech detected")

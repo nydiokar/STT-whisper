@@ -1,44 +1,51 @@
-# Voice Input Service Documentation
+# Voice Input STT - Documentation
 
-Welcome to the documentation for the Voice Input Service, a system-wide speech-to-text application that provides real-time transcription using OpenAI's Whisper models.
+**Last Updated:** 2025-10-26
 
-## Documentation Sections
+## 📖 Start Here
 
-### [Architecture](architecture/README.md)
-- System overview
-- Component documentation
-- Data flow diagrams
+- **[PROJECT_STATUS.md](PROJECT_STATUS.md)** - **READ THIS FIRST** - Current state, what works, what's next
 
-### [User Guide](user_guide/README.md)
-- Installation instructions
-- Usage guide
-- Common workflows
-- Troubleshooting
+## 📱 Android Implementation
 
-### [Development Guide](development/README.md)
-- Setting up the development environment
-- Project structure
-- Testing framework
-- Contributing guidelines
+- **[FRONTEND_SPECS_SIMPLIFIED.md](android/FRONTEND_SPECS_SIMPLIFIED.md)** - Simplified MainActivity plan (next phase)
+- **[TESTING_REPORT_2025_10_26.md](android/TESTING_REPORT_2025_10_26.md)** - Real-world testing findings & solutions
 
-### [API Documentation](api/README.md)
-- Component interfaces
-- Public methods and classes
-- Configuration options
+## 📂 Folder Structure
 
-## Quick Start
-
-To start the Voice Input Service:
-
-```powershell
-# Navigate to the project directory
-cd C:\path\to\STT
-
-# Activate the virtual environment
-.\.venv\Scripts\activate
-
-# Run the application
-python -m voice_input_service
+```
+docs/
+├── PROJECT_STATUS.md          ← Main status doc (start here!)
+├── README.md                  ← This file
+├── android/
+│   ├── FRONTEND_SPECS_SIMPLIFIED.md  ← Next: MainActivity
+│   ├── TESTING_REPORT_2025_10_26.md  ← Test findings
+│   └── archive/               ← Completed implementation docs
+├── archive/                   ← Historical/completed docs
+│   └── 2025-10-26/           ← Old status docs, completed phases
+├── core/                      ← Core architecture docs
+└── desktop/                   ← Desktop implementation (legacy)
 ```
 
-The application will first check for microphone access, then initialize the UI and begin listening for keyboard shortcuts to start/stop recording. 
+## 🎯 Current Status (Quick Summary)
+
+**Version:** 1.1 (IME Production-Ready)
+
+**What Works:**
+- ✅ Voice keyboard (IME) in any app
+- ✅ Dual modes (TAP/HOLD)
+- ✅ Smart formatting (emails, URLs)
+- ✅ Custom vocabulary (personalized corrections)
+- ✅ Space + Backspace buttons
+- ✅ Settings (inline + app)
+
+**Next Steps:**
+- Build MainActivity (history + storage)
+- OR test different Whisper models
+- OR add voice commands
+
+See [PROJECT_STATUS.md](PROJECT_STATUS.md) for complete details.
+
+## 📚 Historical Docs
+
+Old docs are in `archive/` - kept for reference but no longer actively maintained.

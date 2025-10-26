@@ -54,6 +54,8 @@ class VoiceKeyboardView(
     var onHapticChanged: ((Boolean) -> Unit)? = null
     var onSensitivityChanged: ((Float) -> Unit)? = null
     var onOpenAppSettings: (() -> Unit)? = null
+    var onSpacePressed: (() -> Unit)? = null
+    var onBackspacePressed: (() -> Unit)? = null
 
     // UI Components
     private val mainKeyboardLayout: LinearLayout  // Main keyboard content
@@ -62,6 +64,7 @@ class VoiceKeyboardView(
     private val microphoneButton: Button
     private val audioVisualizer: AudioVisualizerView  // Audio waveform visualizer
     private val cancelButton: Button
+    private val cancelRow: LinearLayout
     private val tapModeButton: Button
     private val holdModeButton: Button
     private val settingsButton: Button
@@ -219,7 +222,37 @@ class VoiceKeyboardView(
         }
         mainKeyboardLayout.addView(instructionText)
 
-        // Bottom action buttons
+        // Row 1: Cancel button (shown during recording, centered)
+        cancelRow = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(
+                LayoutParams.MATCH_PARENT,
+                LayoutParams.WRAP_CONTENT
+            )
+            gravity = Gravity.CENTER
+            visibility = View.GONE  // Hidden by default
+        }
+
+        cancelButton = Button(context).apply {
+            text = "Cancel Recording"
+            textSize = 14f
+            setBackgroundColor(Color.parseColor("#FF5252"))  // Red
+            setTextColor(Color.WHITE)
+            layoutParams = LinearLayout.LayoutParams(
+                LayoutParams.WRAP_CONTENT,
+                dpToPx(40)
+            ).apply {
+                topMargin = dpToPx(4)
+                bottomMargin = dpToPx(4)
+            }
+            setOnClickListener {
+                onCancelPressed?.invoke()
+            }
+        }
+        cancelRow.addView(cancelButton)
+        mainKeyboardLayout.addView(cancelRow)
+
+        // Row 2: Main action buttons (always visible)
         val actionButtonsLayout = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             layoutParams = LinearLayout.LayoutParams(
@@ -229,32 +262,13 @@ class VoiceKeyboardView(
             gravity = Gravity.CENTER_HORIZONTAL
         }
 
-        // Cancel button (shown during recording/processing)
-        cancelButton = Button(context).apply {
-            text = "Cancel"
-            textSize = 13f
-            setBackgroundColor(Color.parseColor("#FF5252"))  // Red
-            setTextColor(Color.WHITE)
-            visibility = View.GONE  // Hidden when not recording
-            layoutParams = LayoutParams(
-                LayoutParams.WRAP_CONTENT,
-                dpToPx(36)
-            ).apply {
-                marginEnd = dpToPx(6)
-            }
-            setOnClickListener {
-                onCancelPressed?.invoke()
-            }
-        }
-        actionButtonsLayout.addView(cancelButton)
-
         // Tap mode button
         tapModeButton = Button(context).apply {
             text = "TAP"
             textSize = 12f
             setBackgroundColor(Color.parseColor("#4CAF50"))  // Green when active
             setTextColor(Color.WHITE)
-            layoutParams = LayoutParams(
+            layoutParams = LinearLayout.LayoutParams(
                 dpToPx(70),
                 dpToPx(36)
             ).apply {
@@ -265,7 +279,6 @@ class VoiceKeyboardView(
                     isTapMode = true
                     onModeToggled?.invoke(true)
                     updateModeButtons()
-                    // Settings drawer will sync when opened (loads current preferences)
                 }
             }
         }
@@ -277,7 +290,7 @@ class VoiceKeyboardView(
             textSize = 12f
             setBackgroundColor(Color.parseColor("#616161"))  // Gray when inactive
             setTextColor(Color.parseColor("#AAAAAA"))  // Dimmed text
-            layoutParams = LayoutParams(
+            layoutParams = LinearLayout.LayoutParams(
                 dpToPx(70),
                 dpToPx(36)
             ).apply {
@@ -288,19 +301,62 @@ class VoiceKeyboardView(
                     isTapMode = false
                     onModeToggled?.invoke(false)
                     updateModeButtons()
-                    // Settings drawer will sync when opened (loads current preferences)
                 }
             }
         }
         actionButtonsLayout.addView(holdModeButton)
 
-        // Settings button - Toggle settings drawer
+        // Spacer to push following buttons to the right
+        val spacer = View(context).apply {
+            layoutParams = LinearLayout.LayoutParams(0, dpToPx(36), 1f)
+        }
+        actionButtonsLayout.addView(spacer)
+
+        // Space button
+        val spaceButton = Button(context).apply {
+            text = "Space"
+            textSize = 12f
+            setBackgroundColor(Color.parseColor("#616161"))  // Gray
+            setTextColor(Color.WHITE)
+            layoutParams = LinearLayout.LayoutParams(
+                dpToPx(70),
+                dpToPx(36)
+            ).apply {
+                marginEnd = dpToPx(6)
+            }
+            setOnClickListener {
+                onSpacePressed?.invoke()
+                performHapticFeedback()
+            }
+        }
+        actionButtonsLayout.addView(spaceButton)
+
+        // Backspace button
+        val backspaceButton = Button(context).apply {
+            text = "⌫"
+            textSize = 16f
+            setBackgroundColor(Color.parseColor("#616161"))  // Gray
+            setTextColor(Color.WHITE)
+            layoutParams = LinearLayout.LayoutParams(
+                dpToPx(50),
+                dpToPx(36)
+            ).apply {
+                marginEnd = dpToPx(6)
+            }
+            setOnClickListener {
+                onBackspacePressed?.invoke()
+                performHapticFeedback()
+            }
+        }
+        actionButtonsLayout.addView(backspaceButton)
+
+        // Settings button
         settingsButton = Button(context).apply {
             text = "⚙️"
             textSize = 14f
             setBackgroundColor(Color.parseColor("#757575"))  // Gray
             setTextColor(Color.WHITE)
-            layoutParams = LayoutParams(
+            layoutParams = LinearLayout.LayoutParams(
                 dpToPx(40),
                 dpToPx(36)
             )
@@ -362,6 +418,9 @@ class VoiceKeyboardView(
         val mode = preferencesManager.defaultMode
         isTapMode = (mode == InputMode.TAP)
         updateModeButtons()
+
+        // Apply saved visualizer sensitivity
+        audioVisualizer.sensitivity = preferencesManager.visualizerSensitivity
     }
 
     // ============================================================================
@@ -377,8 +436,23 @@ class VoiceKeyboardView(
             microphoneButton.setBackgroundResource(R.drawable.button_circle_green)
             microphoneButton.setCompoundDrawablesWithIntrinsicBounds(0, R.drawable.ic_microphone_ready, 0, 0)
             microphoneButton.isEnabled = true
-            microphoneButton.clearAnimation()  // Stop any pulsing
-            cancelButton.visibility = View.GONE
+
+            // Add gentle pulse animation to attract attention
+            microphoneButton.clearAnimation()
+            val pulseAnimation = android.view.animation.ScaleAnimation(
+                1f, 1.1f,  // Scale from 100% to 110%
+                1f, 1.1f,
+                android.view.animation.Animation.RELATIVE_TO_SELF, 0.5f,
+                android.view.animation.Animation.RELATIVE_TO_SELF, 0.5f
+            ).apply {
+                duration = 1000  // 1 second per pulse
+                repeatCount = android.view.animation.Animation.INFINITE
+                repeatMode = android.view.animation.Animation.REVERSE
+                interpolator = android.view.animation.AccelerateDecelerateInterpolator()
+            }
+            microphoneButton.startAnimation(pulseAnimation)
+
+            cancelRow.visibility = View.GONE
             previewText.visibility = View.GONE
             audioVisualizer.visibility = View.GONE
             audioVisualizer.clear()
@@ -394,7 +468,7 @@ class VoiceKeyboardView(
             microphoneButton.setBackgroundResource(R.drawable.button_circle_red)
             microphoneButton.setCompoundDrawablesWithIntrinsicBounds(0, 0, 0, 0)  // Hide icon
             microphoneButton.clearAnimation()  // No animation during recording
-            cancelButton.visibility = View.VISIBLE
+            cancelRow.visibility = View.VISIBLE
             previewText.visibility = View.GONE
 
             // Show audio visualizer
@@ -412,7 +486,7 @@ class VoiceKeyboardView(
             microphoneButton.setBackgroundResource(R.drawable.button_circle_orange)
             microphoneButton.setCompoundDrawablesWithIntrinsicBounds(0, 0, 0, 0)  // Hide icon
             microphoneButton.isEnabled = false
-            cancelButton.visibility = View.VISIBLE
+            cancelRow.visibility = View.VISIBLE
             audioVisualizer.visibility = View.GONE
 
             // Pulse the orange button itself
@@ -432,7 +506,7 @@ class VoiceKeyboardView(
             microphoneButton.setCompoundDrawablesWithIntrinsicBounds(0, R.drawable.ic_microphone_ready, 0, 0)
             microphoneButton.isEnabled = true
             microphoneButton.clearAnimation()
-            cancelButton.visibility = View.GONE
+            cancelRow.visibility = View.GONE
             previewText.visibility = View.GONE
             audioVisualizer.visibility = View.GONE
 
@@ -496,16 +570,16 @@ class VoiceKeyboardView(
 
     private fun updateModeButtons() {
         if (isTapMode) {
-            // Tap mode active
-            tapModeButton.setBackgroundColor(Color.parseColor("#4CAF50"))  // Green
+            // Tap mode active - soft blue quartz
+            tapModeButton.setBackgroundColor(Color.parseColor("#6BA3D1"))  // Soft blue
             tapModeButton.setTextColor(Color.WHITE)
             holdModeButton.setBackgroundColor(Color.parseColor("#616161"))  // Gray
             holdModeButton.setTextColor(Color.parseColor("#AAAAAA"))  // Dimmed
         } else {
-            // Hold mode active
+            // Hold mode active - soft blue quartz
             tapModeButton.setBackgroundColor(Color.parseColor("#616161"))  // Gray
             tapModeButton.setTextColor(Color.parseColor("#AAAAAA"))  // Dimmed
-            holdModeButton.setBackgroundColor(Color.parseColor("#4CAF50"))  // Green
+            holdModeButton.setBackgroundColor(Color.parseColor("#6BA3D1"))  // Soft blue
             holdModeButton.setTextColor(Color.WHITE)
         }
     }

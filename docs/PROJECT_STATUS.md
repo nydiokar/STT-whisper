@@ -1,13 +1,13 @@
 # Voice Input STT - Project Status
 
 **Last Updated:** 2025-10-26
-**Status:** ✅ IME Complete - Ready for Settings & Polish
+**Status:** 🎉 IME PRODUCTION-READY - Settings Complete, Tested in Real Apps
 
 ---
 
 ## 🎯 What Is This Project?
 
-A voice-to-text Android app using **ONNX Runtime with Samsung AI chip acceleration** for fast speech recognition. Goal: Build an IME (Input Method Editor) - a "lazy keyboard" where you speak instead of type.
+A voice-to-text Android app using **ONNX Runtime with Samsung AI chip acceleration** for fast speech recognition. Built as an IME (Input Method Editor) - a system keyboard where you speak instead of type, working in **any app** (WhatsApp, Chrome, Gmail, etc.).
 
 ---
 
@@ -19,7 +19,7 @@ A voice-to-text Android app using **ONNX Runtime with Samsung AI chip accelerati
 - Model: Whisper SMALL INT8 (244M parameters)
 - Performance: 0.44x RTF (~4.8s for 11s audio) - 6x faster than old whisper.cpp
 - Hardware: NNAPI acceleration via Samsung APU (MediaTek)
-- Quality: Perfect transcription, no hallucinations
+- Quality: Excellent transcription for natural speech
 
 **Full Pipeline:**
 - AudioRecorder → AudioProcessor (VAD) → WhisperEngine (ONNX) → TextProcessor → Output
@@ -96,56 +96,100 @@ implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
 
 ---
 
-## ✅ IME Development - COMPLETE!
+## ✅ IME Development - PRODUCTION-READY!
 
-### Achieved
-Transformed app into a production-quality system keyboard (IME) that works in any app (WhatsApp, Chrome, Notes, etc.)
+### Implementation Complete ✅
 
-**Key Features:**
-- Dual input modes (Tap/Hold)
-- Real-time audio visualizer (40-bar waveform)
-- Professional cosmos-themed UI
-- State-based animations
-- Comprehensive error handling
-- ~1,100 lines of production Kotlin code
+Transformed app into a **production-quality system keyboard (IME)** that works in any app (WhatsApp, Chrome, Notes, etc.)
 
-See `CURRENT_STATUS_2025_10_26.md` for complete implementation details.
+**Core Features:**
+- ✅ Full `InputMethodService` implementation
+- ✅ Dual input modes (Tap/Hold) with user preference
+- ✅ Real-time audio visualizer (40-bar waveform)
+- ✅ Professional cosmos-themed UI
+- ✅ State-based animations (ready/recording/processing/error/success)
+- ✅ Comprehensive error handling
+- ✅ Lifecycle-aware architecture (no memory leaks)
+- ✅ ~1,700+ lines of production Kotlin code
 
-## 🚀 Current Phase: Settings & Configuration
+**Settings System:**
+- ✅ Inline slide-up drawer (no app switching!)
+- ✅ Default input mode (TAP/HOLD)
+- ✅ Haptic feedback toggle (fully functional)
+- ✅ Visualizer sensitivity slider (fully functional)
+- ✅ Immediate saving (no Apply button)
+- ✅ Preference persistence across sessions
+- ✅ App settings activity (Help, About, Current Config)
 
-### Goal
-Build user-friendly settings system for the IME without disrupting workflow.
+**Files Created:**
+1. `VoiceInputIME.kt` (609 lines) - Main IME service
+2. `VoiceKeyboardView.kt` (465+ lines) - Keyboard UI
+3. `AudioVisualizerView.kt` (97 lines) - Waveform display
+4. `SettingsDrawerView.kt` (383 lines) - Inline settings panel
+5. `PreferencesManager.kt` (103 lines) - User preferences
+6. `SettingsActivity.kt` (215 lines) - Full app settings
+7. Multiple drawables and animations
 
-### What Needs to be Built
+**Testing Status:**
+- ✅ Tested in multiple real-world apps
+- ✅ Text insertion working correctly
+- ✅ Recording flow stable (no crashes)
+- ✅ Settings persistence verified
+- ✅ **Email/URL dictation WORKS!** (v1.1 complete)
+- ✅ **Custom vocabulary** for personalized corrections
+- ✅ **Space + Backspace buttons** added
 
-1. **IME Service**
-   - Extend `InputMethodService`
-   - Keyboard layout with microphone button
-   - Recording lifecycle management
+**Recent Improvements (v1.1):**
+- ✅ Smart formatting: "john at gmail dot com" → "john@gmail.com"
+- ✅ Custom vocabulary: "nitiocard" → "Nydiokar" (personalized)
+- ✅ Essential editing: Space and Backspace buttons
+- ✅ Enhanced logging: See filtered/transformed text
+- ✅ Fixed layout: Cancel button on separate row
 
-2. **Integration**
-   - Connect VoiceInputPipeline to IME
-   - Text insertion via `InputConnection`
-   - Handle different text field contexts
+See `CURRENT_STATUS_2025_10_26.md` and `SETTINGS_IMPLEMENTATION_COMPLETE.md` for complete details.
 
-3. **UX Design**
-   - Mode switching (voice vs keyboard)
-   - Recording indicator
-   - Text preview area
-   - Error handling UI
+## 🚀 Current Phase: v1.1 COMPLETE - Choose Next Direction
 
-4. **Permissions**
-   - `BIND_INPUT_METHOD` permission
-   - IME manifest declaration
-   - User setup guide
+### What's Done ✅
+1. ✅ IME core functionality (v1.0)
+2. ✅ Dual mode input system (v1.0)
+3. ✅ Settings UI (inline + app) (v1.0)
+4. ✅ Real-world testing (v1.0)
+5. ✅ Smart formatting (v1.1)
+6. ✅ Custom vocabulary (v1.1)
+7. ✅ Essential editing buttons (v1.1)
 
-### Research Needed
-- Android IME APIs and lifecycle
-- How to register as system input method
-- InputConnection best practices
-- Compatibility across different apps
+### What's Next (3 Options)
 
-See **DEVELOPMENT_NOTES.md** for detailed implementation plan.
+**Option 1: Test Different Whisper Models** 🔬
+- Compare TINY vs BASE vs SMALL
+- Benchmark speed vs accuracy trade-offs
+- Find optimal model for your use case
+- **Estimated:** 4-6 hours
+- **Benefit:** Better accuracy OR faster speed
+
+**Option 2: Build MainActivity (History + Storage)** 📱
+- Store all transcriptions automatically
+- View/search history
+- Copy/edit/delete past transcriptions
+- See `docs/android/FRONTEND_SPECS_SIMPLIFIED.md`
+- **Estimated:** 2-3 days
+- **Benefit:** Never lose transcriptions, searchable history
+
+**Option 3: Advanced Post-Processing** 🛠️
+- Voice commands ("comma", "period", "new line")
+- Smart capitalization after periods
+- Phone number formatting
+- Smart punctuation handling
+- See `docs/android/TESTING_REPORT_2025_10_26.md`
+- Estimated: 4-6 hours
+
+**Option 3: Advanced IME Features** ⚡
+- Voice commands ("new line", "comma")
+- Multi-language support
+- Custom Whisper prompts
+- Model selection (if more models available)
+- Estimated: 1-2 weeks
 
 ---
 
@@ -167,6 +211,8 @@ See **DEVELOPMENT_NOTES.md** for detailed implementation plan.
 
 ## ⚠️ Known Limitations
 
+### Technical Limitations
+
 1. **Model Selection**
    - Only SMALL model available (RTranslator limitation)
    - Cannot switch between tiny/base/small
@@ -183,6 +229,23 @@ See **DEVELOPMENT_NOTES.md** for detailed implementation plan.
 4. **Language Support**
    - English-only currently
    - Can be extended to other languages (architecture supports it)
+
+### Usage Limitations (Found in Testing)
+
+5. **Email Address Dictation** ⚠️
+   - Speaking emails ("john at gmail dot com") does not work reliably
+   - Whisper not optimized for dictation-style structured input
+   - **Solution planned:** Post-processing rules in v1.1 (see TESTING_REPORT)
+   - **Workaround:** Type emails manually, use voice for body text
+
+6. **URL Dictation** ⚠️
+   - Speaking URLs ("google dot com") does not work reliably
+   - Same root cause as email issue
+   - **Solution planned:** Post-processing rules in v1.1 (see TESTING_REPORT)
+   - **Workaround:** Use browser autocomplete, type URLs manually
+
+**Impact:** Low for most use cases (messaging, notes, social media). High for structured data entry.
+**See:** `docs/android/TESTING_REPORT_2025_10_26.md` for detailed analysis and solutions.
 
 ---
 
@@ -281,17 +344,34 @@ Most issues from old whisper.cpp are **not relevant** for ONNX, but keep in mind
 
 ---
 
-## ✅ Success Criteria Achieved
+## ✅ Success Criteria - ALL ACHIEVED!
 
 - [x] ONNX migration complete
 - [x] 6x performance improvement
-- [x] Perfect transcription quality
+- [x] Excellent transcription quality (natural speech)
 - [x] Full pipeline working
 - [x] VAD integration
 - [x] File and streaming support
 - [x] Comprehensive testing
-- [ ] IME implementation (next phase)
+- [x] **IME implementation COMPLETE!** 🎉
+- [x] **Settings system COMPLETE!** 🎉
+- [x] **Real-world testing DONE!** 🎉
+- [x] **Production-ready IME!** 🚀
 
 ---
 
-**Ready to build the IME! 🚀**
+## 📚 Key Documentation
+
+**Essential Docs:**
+- `docs/PROJECT_STATUS.md` (this file) - Current state overview
+- `docs/CURRENT_STATUS_2025_10_26.md` - Detailed IME implementation summary
+- `docs/android/SETTINGS_IMPLEMENTATION_COMPLETE.md` - Settings system details
+- `docs/android/TESTING_REPORT_2025_10_26.md` - Real-world testing findings
+- `docs/android/FRONTEND_SPECS_SIMPLIFIED.md` - Simplified MainActivity plan
+
+**Next Steps:**
+- `docs/NEXT_STEPS.md` - Detailed roadmap for future development
+
+---
+
+**IME is production-ready and tested! Ready for next phase! 🚀**

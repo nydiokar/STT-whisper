@@ -66,6 +66,21 @@ class PreferencesManager(context: Context) {
         }
 
     /**
+     * Whether smart formatting is enabled
+     * Default: true (ON)
+     *
+     * When enabled, spoken patterns are converted to symbols:
+     * - "john at gmail dot com" → "john@gmail.com"
+     * - "google dot com" → "google.com"
+     * - "www dot example dot org" → "www.example.org"
+     */
+    var smartFormattingEnabled: Boolean
+        get() = prefs.getBoolean(KEY_SMART_FORMATTING, true)
+        set(value) {
+            prefs.edit().putBoolean(KEY_SMART_FORMATTING, value).apply()
+        }
+
+    /**
      * Reset all preferences to defaults
      */
     fun reset() {
@@ -78,6 +93,7 @@ class PreferencesManager(context: Context) {
         private const val KEY_DEFAULT_MODE = "default_mode"
         private const val KEY_HAPTIC_ENABLED = "haptic_enabled"
         private const val KEY_VISUALIZER_SENSITIVITY = "visualizer_sensitivity"
+        private const val KEY_SMART_FORMATTING = "smart_formatting"
     }
 }
 
