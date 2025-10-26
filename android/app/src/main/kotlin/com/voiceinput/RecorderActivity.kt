@@ -11,13 +11,14 @@ import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
-import com.voiceinput.core.VoiceInputPipeline
+import com.voiceinput.config.AppConfig
+import com.voiceinput.core.AudioRecorder
+import com.voiceinput.core.WhisperEngine
 import com.voiceinput.data.Note
 import com.voiceinput.data.NotesRepository
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.collect
+import android.util.Log
 
 /**
  * Full-screen recording activity for creating voice notes
@@ -25,7 +26,8 @@ import kotlinx.coroutines.launch
 class RecorderActivity : AppCompatActivity() {
 
     private lateinit var repository: NotesRepository
-    private lateinit var pipeline: VoiceInputPipeline
+    private var audioRecorder: AudioRecorder? = null
+    private var whisperEngine: WhisperEngine? = null
 
     private lateinit var statusText: TextView
     private lateinit var transcriptionText: TextView
@@ -37,10 +39,12 @@ class RecorderActivity : AppCompatActivity() {
     private var isRecording = false
     private var currentTranscription = ""
     private var recordingStartTime: Long = 0
+    private var recordingJob: Job? = null
 
-    private val scope = CoroutineScope(Dispatchers.Main + Job())
+    private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
     companion object {
+        private const val TAG = "RecorderActivity"
         private const val PERMISSION_REQUEST_CODE = 1001
     }
 
@@ -48,13 +52,40 @@ class RecorderActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
 
         repository = NotesRepository(this)
-        pipeline = VoiceInputPipeline(this)
 
         val container = createUI()
         setContentView(container)
 
         // Check microphone permission
         checkPermission()
+
+        // Initialize components
+        initializeComponents()
+    }
+
+    private fun initializeComponents() {
+        scope.launch {
+            try {
+                Log.i(TAG, "Initializing components...")
+                audioRecorder = AudioRecorder()
+                whisperEngine = WhisperEngine(this@RecorderActivity)
+                val initSuccess = whisperEngine?.initialize() ?: false
+
+                if (initSuccess) {
+                    Log.i(TAG, "Components initialized successfully")
+                } else {
+                    Log.e(TAG, "Failed to initialize Whisper engine")
+                    runOnUiThread {
+                        Toast.makeText(this@RecorderActivity, "Failed to initialize speech recognition", Toast.LENGTH_LONG).show()
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error initializing components", e)
+                runOnUiThread {
+                    Toast.makeText(this@RecorderActivity, "Initialization error: ${e.message}", Toast.LENGTH_LONG).show()
+                }
+            }
+        }
     }
 
     private fun createUI(): FrameLayout {
@@ -262,6 +293,11 @@ class RecorderActivity : AppCompatActivity() {
     }
 
     private fun startRecording() {
+        if (audioRecorder == null || whisperEngine == null) {
+            Toast.makeText(this, "Speech recognition not ready", Toast.LENGTH_SHORT).show()
+            return
+        }
+
         isRecording = true
         recordingStartTime = System.currentTimeMillis()
 
@@ -275,13 +311,26 @@ class RecorderActivity : AppCompatActivity() {
             cornerRadius = dpToPx(16).toFloat()
         }
 
-        scope.launch {
+        val recorder = audioRecorder ?: return
+        val started = recorder.start()
+
+        if (!started) {
+            Toast.makeText(this, "Failed to start recording", Toast.LENGTH_SHORT).show()
+            resetRecording()
+            return
+        }
+
+        // Collect audio chunks in background
+        recordingJob = scope.launch {
             try {
-                pipeline.startStreaming { result ->
-                    handleTranscription(result.text)
+                recorder.audioStream().collect { chunk ->
+                    // Audio is being collected by AudioRecorder
+                    // We just need to keep the stream alive
+                    Log.d(TAG, "Collected audio chunk: ${chunk.size} bytes")
                 }
             } catch (e: Exception) {
-                runOnUiThread {
+                Log.e(TAG, "Recording error", e)
+                withContext(Dispatchers.Main) {
                     Toast.makeText(this@RecorderActivity, "Recording error: ${e.message}", Toast.LENGTH_SHORT).show()
                     resetRecording()
                 }
@@ -291,44 +340,54 @@ class RecorderActivity : AppCompatActivity() {
 
     private fun stopRecording() {
         isRecording = false
+        recordingJob?.cancel()
+        recordingJob = null
 
-        scope.launch {
+        scope.launch(Dispatchers.IO) {
             try {
-                pipeline.stopStreaming()
+                val recordedAudio = audioRecorder?.stop() ?: ByteArray(0)
 
                 runOnUiThread {
-                    statusText.text = if (currentTranscription.isEmpty()) {
-                        "No speech detected"
-                    } else {
-                        "Recording complete"
-                    }
+                    statusText.text = "Processing..."
                     statusText.setTextColor(Color.GRAY)
+                }
 
-                    // Reset button appearance
-                    recordButton.background = android.graphics.drawable.GradientDrawable().apply {
-                        shape = android.graphics.drawable.GradientDrawable.OVAL
-                        setColor(Color.parseColor("#6BA3D1"))
+                // Transcribe the audio
+                if (recordedAudio.isNotEmpty()) {
+                    val result = whisperEngine?.transcribe(recordedAudio)
+
+                    runOnUiThread {
+                        if (result != null && result.text.isNotEmpty()) {
+                            currentTranscription = result.text
+                            transcriptionText.text = result.text
+                            transcriptionText.visibility = View.VISIBLE
+                            statusText.text = "Recording complete"
+                            bottomBar.visibility = View.VISIBLE
+                        } else {
+                            statusText.text = "No speech detected"
+                        }
+
+                        // Reset button appearance
+                        recordButton.background = android.graphics.drawable.GradientDrawable().apply {
+                            shape = android.graphics.drawable.GradientDrawable.OVAL
+                            setColor(Color.parseColor("#6BA3D1"))
+                        }
                     }
-
-                    // Show action buttons if we have transcription
-                    if (currentTranscription.isNotEmpty()) {
-                        bottomBar.visibility = View.VISIBLE
+                } else {
+                    runOnUiThread {
+                        statusText.text = "No audio recorded"
+                        recordButton.background = android.graphics.drawable.GradientDrawable().apply {
+                            shape = android.graphics.drawable.GradientDrawable.OVAL
+                            setColor(Color.parseColor("#6BA3D1"))
+                        }
                     }
                 }
             } catch (e: Exception) {
+                Log.e(TAG, "Stop error", e)
                 runOnUiThread {
-                    Toast.makeText(this@RecorderActivity, "Stop error: ${e.message}", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this@RecorderActivity, "Processing error: ${e.message}", Toast.LENGTH_SHORT).show()
+                    resetRecording()
                 }
-            }
-        }
-    }
-
-    private fun handleTranscription(text: String) {
-        if (text.isNotEmpty()) {
-            currentTranscription = text
-            runOnUiThread {
-                transcriptionText.text = text
-                transcriptionText.visibility = View.VISIBLE
             }
         }
     }
@@ -363,6 +422,7 @@ class RecorderActivity : AppCompatActivity() {
         transcriptionText.visibility = View.GONE
         statusText.text = "Tap to record"
         statusText.setTextColor(Color.GRAY)
+        bottomBar.visibility = View.GONE
 
         recordButton.background = android.graphics.drawable.GradientDrawable().apply {
             shape = android.graphics.drawable.GradientDrawable.OVAL
@@ -372,11 +432,13 @@ class RecorderActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        recordingJob?.cancel()
         if (isRecording) {
-            scope.launch {
-                pipeline.stopStreaming()
-            }
+            audioRecorder?.stop()
         }
+        audioRecorder?.release()
+        whisperEngine?.release()
+        scope.cancel()
     }
 
     private fun dpToPx(dp: Int): Int {
