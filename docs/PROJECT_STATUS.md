@@ -179,23 +179,36 @@ See `CURRENT_STATUS_2025_10_26.md` and `SETTINGS_IMPLEMENTATION_COMPLETE.md` for
 ### v1.2 Features (NEW!)
 
 **MainActivity (Note History):**
+- Cosmos gradient background (matches IME perfectly)
 - Displays all saved voice notes in reverse chronological order
+- Cards with #1a1a2e background, elevation/glow, proper spacing
 - Tap to expand/collapse full text (preview shows first 60 chars)
-- Copy notes to clipboard
+- Copy notes to clipboard (green action buttons)
 - Delete notes with confirmation dialog
 - Empty state with helpful instructions
-- FAB (+) button launches RecorderActivity
-- Settings button for quick access
+- FAB: GREEN circle with mic icon (matches IME ready state)
+- Settings button in top bar
 - Auto-refreshes when returning from RecorderActivity
 
 **RecorderActivity (Standalone Recording):**
+- Cosmos gradient background (matches IME perfectly)
 - Full-screen recording interface
-- Large circular button (tap to start/stop)
-- Visual feedback (button becomes red square when recording)
+- Large circular mic button:
+  - GREEN circle when ready (#4CAF50 - matches IME)
+  - RED circle when recording (#f44336 - matches IME)
+  - Stays circular (not square!)
 - Real-time transcription display
 - Save/Discard actions after recording
 - Back navigation to MainActivity
 - Tracks recording duration
+
+**Styling (Consistent Across All Activities):**
+- Background: cosmos_gradient (#0f0c29 → #302b63 → #24243e)
+- Top bars: #1a1a2e
+- Cards: #1a1a2e with elevation
+- Text: #e0e0e0 (primary), #a0a0a0 (secondary), #808080 (tertiary)
+- Accent: #4CAF50 (green for ready state)
+- Error: #f44336 (red for recording/errors)
 
 **Auto-Save System:**
 - IME automatically saves all successful transcriptions
@@ -209,9 +222,47 @@ See `CURRENT_STATUS_2025_10_26.md` and `SETTINGS_IMPLEMENTATION_COMPLETE.md` for
 - `NotesRepository` with SharedPreferences + Gson
 - Full CRUD: save, get, update, delete, search, clear
 
+### Known Missing Features (Deferred from Specs)
+
+**RecorderActivity - Missing from FRONTEND_SPECS_SIMPLIFIED.md:**
+
+1. **Pulsing Mic Animation** (Processing State)
+   - **What:** Mic button should pulse when processing transcription
+   - **Where:** Line 127 of `FRONTEND_SPECS_SIMPLIFIED.md`
+   - **Code Example:** Already implemented in IME at `VoiceKeyboardView.kt:442-453`
+   - **Implementation:** Copy pulse animation from VoiceKeyboardView `showReadyState()`
+   - **Estimated:** 15 minutes
+
+2. **Audio Visualizer During Recording**
+   - **What:** Animated waveform bars during recording (like IME)
+   - **Where:** Line 117 of `FRONTEND_SPECS_SIMPLIFIED.md` - `━━▃▅▇█▇▅▃━━━▃▅▇▅▃━━`
+   - **Code:** `AudioVisualizerView.kt` already exists (97 lines, fully functional)
+   - **Implementation:** Add AudioVisualizerView to RecorderActivity layout, call `updateAudioData()` in recording loop
+   - **Estimated:** 30-60 minutes
+
+3. **Timer Display** (Optional)
+   - **What:** Show recording duration in real-time
+   - **Where:** Line 126 mentions "timer"
+   - **Implementation:** Add TextView, update every second during recording
+   - **Estimated:** 15 minutes
+
+**MainActivity - Future Enhancements:**
+- Search/filter notes (see FRONTEND_SPECS_SIMPLIFIED.md v1.1)
+- Manual note creation
+- Edit existing notes inline
+- Share notes to other apps
+- Export to file
+
 ### What's Next (3 Options)
 
-**Option 1: Test Different Whisper Models** 🔬
+**Option 1: Complete RecorderActivity Per Specs** ⚡
+- Add pulsing animation (15 min)
+- Add audio visualizer (30-60 min)
+- Optional: Add timer (15 min)
+- **Total Estimated:** 1-2 hours
+- **Benefit:** RecorderActivity matches specs completely, professional polish
+
+**Option 2: Test Different Whisper Models** 🔬
 - Compare TINY vs BASE vs SMALL
 - Benchmark speed vs accuracy trade-offs
 - Find optimal model for your use case
