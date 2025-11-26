@@ -2,7 +2,7 @@ package com.voiceinput.ime
 
 import android.content.Context
 import android.graphics.Color
-import android.graphics.drawable.AnimationDrawable
+import android.graphics.drawable.GradientDrawable
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.util.TypedValue
@@ -11,10 +11,8 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.animation.AnimationUtils
 import android.widget.Button
-import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
-import androidx.core.content.ContextCompat
 import com.voiceinput.R
 import com.voiceinput.config.InputMode
 import com.voiceinput.config.PreferencesManager
@@ -63,13 +61,18 @@ class VoiceKeyboardView(
     private val statusText: TextView
     private val microphoneButton: Button
     private val audioVisualizer: AudioVisualizerView  // Audio waveform visualizer
-    private val cancelButton: Button
-    private val cancelRow: LinearLayout
+    private val cancelIcon: TextView
     private val tapModeButton: Button
     private val holdModeButton: Button
     private val settingsButton: Button
     private val previewText: TextView
     private val instructionText: TextView
+
+    private val readyGradientColors = intArrayOf(Color.parseColor("#5B86E5"), Color.parseColor("#36D1DC"))
+    private val recordingGradientColors = intArrayOf(Color.parseColor("#FDC830"), Color.parseColor("#F37335"))
+    private val processingGradientColors = intArrayOf(Color.parseColor("#8E2DE2"), Color.parseColor("#4A00E0"))
+    private val recordingAccentColor = Color.parseColor("#FFE082")
+    private val processingAccentColor = Color.parseColor("#B39DDB")
 
     // Mode
     private var isTapMode: Boolean = true  // Will be loaded from preferences
@@ -150,16 +153,16 @@ class VoiceKeyboardView(
             }
         }
 
-        // Microphone button (main action) - smaller circular button (60dp instead of 80dp)
+        // Microphone button (main action) - calmer comet-themed control
         microphoneButton = Button(context).apply {
-            setCompoundDrawablesWithIntrinsicBounds(0, R.drawable.ic_microphone_ready, 0, 0)
-            compoundDrawablePadding = 0
-            text = ""  // No text, just icon
-            setBackgroundResource(R.drawable.button_circle_green)
+            text = "☄"
+            textSize = 28f
             setTextColor(Color.WHITE)
+            isAllCaps = false
+            setPadding(0, 0, 0, 0)
             isEnabled = false  // Disabled until initialized
             layoutParams = LayoutParams(
-                dpToPx(60),  // Smaller button
+                dpToPx(60),
                 dpToPx(60)
             ).apply {
                 marginEnd = dpToPx(12)
@@ -191,6 +194,7 @@ class VoiceKeyboardView(
             }
         }
         recordingArea.addView(microphoneButton)
+        applyMicrophoneVisualState(MicrophoneVisualState.READY)
 
         // Audio visualizer (waveform display during recording)
         audioVisualizer = AudioVisualizerView(context).apply {
@@ -204,6 +208,26 @@ class VoiceKeyboardView(
             sensitivity = preferencesManager.visualizerSensitivity
         }
         recordingArea.addView(audioVisualizer)
+
+        cancelIcon = TextView(context).apply {
+            text = "✕"
+            textSize = 18f
+            setTextColor(Color.parseColor("#D0D0D0"))
+            gravity = Gravity.CENTER
+            alpha = 0.7f
+            contentDescription = "Cancel recording"
+            visibility = View.GONE
+            layoutParams = LinearLayout.LayoutParams(
+                dpToPx(36),
+                dpToPx(36)
+            ).apply {
+                marginStart = dpToPx(8)
+            }
+            setOnClickListener {
+                onCancelPressed?.invoke()
+            }
+        }
+        recordingArea.addView(cancelIcon)
 
         mainKeyboardLayout.addView(recordingArea)
 
@@ -222,37 +246,7 @@ class VoiceKeyboardView(
         }
         mainKeyboardLayout.addView(instructionText)
 
-        // Row 1: Cancel button (shown during recording, centered)
-        cancelRow = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            layoutParams = LinearLayout.LayoutParams(
-                LayoutParams.MATCH_PARENT,
-                LayoutParams.WRAP_CONTENT
-            )
-            gravity = Gravity.CENTER
-            visibility = View.GONE  // Hidden by default
-        }
-
-        cancelButton = Button(context).apply {
-            text = "Cancel Recording"
-            textSize = 14f
-            setBackgroundColor(Color.parseColor("#FF5252"))  // Red
-            setTextColor(Color.WHITE)
-            layoutParams = LinearLayout.LayoutParams(
-                LayoutParams.WRAP_CONTENT,
-                dpToPx(40)
-            ).apply {
-                topMargin = dpToPx(4)
-                bottomMargin = dpToPx(4)
-            }
-            setOnClickListener {
-                onCancelPressed?.invoke()
-            }
-        }
-        cancelRow.addView(cancelButton)
-        mainKeyboardLayout.addView(cancelRow)
-
-        // Row 2: Main action buttons (always visible)
+        // Row 1: Main action buttons (always visible)
         val actionButtonsLayout = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             layoutParams = LinearLayout.LayoutParams(
@@ -423,6 +417,43 @@ class VoiceKeyboardView(
         audioVisualizer.sensitivity = preferencesManager.visualizerSensitivity
     }
 
+    private enum class MicrophoneVisualState {
+        READY,
+        RECORDING,
+        PROCESSING
+    }
+
+    private fun createCometDrawable(state: MicrophoneVisualState): GradientDrawable {
+        val colors = when (state) {
+            MicrophoneVisualState.READY -> readyGradientColors
+            MicrophoneVisualState.RECORDING -> recordingGradientColors
+            MicrophoneVisualState.PROCESSING -> processingGradientColors
+        }
+
+        return GradientDrawable(GradientDrawable.Orientation.TL_BR, colors).apply {
+            shape = GradientDrawable.OVAL
+        }
+    }
+
+    private fun applyMicrophoneVisualState(state: MicrophoneVisualState) {
+        microphoneButton.background = createCometDrawable(state)
+        val iconColor = when (state) {
+            MicrophoneVisualState.READY -> Color.WHITE
+            MicrophoneVisualState.RECORDING -> Color.parseColor("#FFFAF0")
+            MicrophoneVisualState.PROCESSING -> Color.parseColor("#EDE7F6")
+        }
+        microphoneButton.setTextColor(iconColor)
+        val iconAlpha = when (state) {
+            MicrophoneVisualState.READY -> 1f
+            MicrophoneVisualState.RECORDING -> 1f
+            MicrophoneVisualState.PROCESSING -> 0.85f
+        }
+        microphoneButton.alpha = iconAlpha
+        if (microphoneButton.text.isNullOrEmpty()) {
+            microphoneButton.text = "☄"
+        }
+    }
+
     // ============================================================================
     // State Management
     // ============================================================================
@@ -433,8 +464,7 @@ class VoiceKeyboardView(
         post {
             statusText.text = "Ready to speak"
             statusText.setTextColor(Color.parseColor("#FFFFFF"))
-            microphoneButton.setBackgroundResource(R.drawable.button_circle_green)
-            microphoneButton.setCompoundDrawablesWithIntrinsicBounds(0, R.drawable.ic_microphone_ready, 0, 0)
+            applyMicrophoneVisualState(MicrophoneVisualState.READY)
             microphoneButton.isEnabled = true
 
             // Add gentle pulse animation to attract attention
@@ -452,7 +482,7 @@ class VoiceKeyboardView(
             }
             microphoneButton.startAnimation(pulseAnimation)
 
-            cancelRow.visibility = View.GONE
+            cancelIcon.visibility = View.GONE
             previewText.visibility = View.GONE
             audioVisualizer.visibility = View.GONE
             audioVisualizer.clear()
@@ -464,11 +494,10 @@ class VoiceKeyboardView(
         isCurrentlyRecording = true
         post {
             statusText.text = "Recording..."
-            statusText.setTextColor(Color.parseColor("#F44336"))  // Red
-            microphoneButton.setBackgroundResource(R.drawable.button_circle_red)
-            microphoneButton.setCompoundDrawablesWithIntrinsicBounds(0, 0, 0, 0)  // Hide icon
+            statusText.setTextColor(recordingAccentColor)
+            applyMicrophoneVisualState(MicrophoneVisualState.RECORDING)
             microphoneButton.clearAnimation()  // No animation during recording
-            cancelRow.visibility = View.VISIBLE
+            cancelIcon.visibility = View.VISIBLE
             previewText.visibility = View.GONE
 
             // Show audio visualizer
@@ -482,11 +511,10 @@ class VoiceKeyboardView(
         isCurrentlyRecording = false
         post {
             statusText.text = "Processing..."
-            statusText.setTextColor(Color.parseColor("#FF9800"))  // Orange
-            microphoneButton.setBackgroundResource(R.drawable.button_circle_orange)
-            microphoneButton.setCompoundDrawablesWithIntrinsicBounds(0, 0, 0, 0)  // Hide icon
+            statusText.setTextColor(processingAccentColor)
+            applyMicrophoneVisualState(MicrophoneVisualState.PROCESSING)
             microphoneButton.isEnabled = false
-            cancelRow.visibility = View.VISIBLE
+            cancelIcon.visibility = View.VISIBLE
             audioVisualizer.visibility = View.GONE
 
             // Pulse the orange button itself
@@ -502,11 +530,10 @@ class VoiceKeyboardView(
             statusText.text = "❌ Error: $message"
             statusText.setTextColor(Color.parseColor("#F44336"))
             statusText.textSize = 13f  // Slightly smaller for longer messages
-            microphoneButton.setBackgroundResource(R.drawable.button_circle_green)
-            microphoneButton.setCompoundDrawablesWithIntrinsicBounds(0, R.drawable.ic_microphone_ready, 0, 0)
+            applyMicrophoneVisualState(MicrophoneVisualState.READY)
             microphoneButton.isEnabled = true
             microphoneButton.clearAnimation()
-            cancelRow.visibility = View.GONE
+            cancelIcon.visibility = View.GONE
             previewText.visibility = View.GONE
             audioVisualizer.visibility = View.GONE
 
@@ -524,8 +551,7 @@ class VoiceKeyboardView(
         post {
             statusText.text = "✅ Text inserted successfully!"
             statusText.setTextColor(Color.parseColor("#4CAF50"))
-            microphoneButton.setBackgroundResource(R.drawable.button_circle_green)
-            microphoneButton.setCompoundDrawablesWithIntrinsicBounds(0, R.drawable.ic_microphone_ready, 0, 0)
+            applyMicrophoneVisualState(MicrophoneVisualState.READY)
             microphoneButton.clearAnimation()
             previewText.visibility = View.GONE
             audioVisualizer.visibility = View.GONE
@@ -538,6 +564,13 @@ class VoiceKeyboardView(
     fun showStatus(message: String) {
         post {
             statusText.text = message
+            when (currentState) {
+                KeyboardState.RECORDING -> statusText.setTextColor(recordingAccentColor)
+                KeyboardState.PROCESSING -> statusText.setTextColor(processingAccentColor)
+                KeyboardState.READY -> statusText.setTextColor(Color.parseColor("#FFFFFF"))
+                KeyboardState.SUCCESS -> statusText.setTextColor(Color.parseColor("#4CAF50"))
+                KeyboardState.ERROR -> statusText.setTextColor(Color.parseColor("#F44336"))
+            }
         }
     }
 
@@ -637,4 +670,3 @@ class VoiceKeyboardView(
         }
     }
 }
-
