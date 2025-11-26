@@ -530,7 +530,7 @@ class VoiceInputIME : InputMethodService(), LifecycleOwner {
             }
             
             keyboardView?.showReadyState()
-            keyboardView?.showStatus("Cancelled")
+            keyboardView?.showTemporaryStatus("Cancelled", 5000L)
         } catch (e: Exception) {
             Log.e(TAG, "Error cancelling recording", e)
         }
@@ -657,4 +657,3 @@ class VoiceInputIME : InputMethodService(), LifecycleOwner {
         keyboardView?.setInputTypeInfo(isPassword, isSingleLine)
     }
 }
-

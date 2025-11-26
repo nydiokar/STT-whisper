@@ -88,6 +88,7 @@ class VoiceKeyboardView(
 
     // State
     private var currentState: KeyboardState = KeyboardState.READY
+    private var statusResetRunnable: Runnable? = null
 
     enum class KeyboardState {
         READY,
@@ -454,6 +455,11 @@ class VoiceKeyboardView(
         }
     }
 
+    private fun clearPendingStatusReset() {
+        statusResetRunnable?.let { statusText.removeCallbacks(it) }
+        statusResetRunnable = null
+    }
+
     // ============================================================================
     // State Management
     // ============================================================================
@@ -462,6 +468,7 @@ class VoiceKeyboardView(
         currentState = KeyboardState.READY
         isCurrentlyRecording = false
         post {
+            clearPendingStatusReset()
             statusText.text = "Ready to speak"
             statusText.setTextColor(Color.parseColor("#FFFFFF"))
             applyMicrophoneVisualState(MicrophoneVisualState.READY)
@@ -493,6 +500,7 @@ class VoiceKeyboardView(
         currentState = KeyboardState.RECORDING
         isCurrentlyRecording = true
         post {
+            clearPendingStatusReset()
             statusText.text = "Recording..."
             statusText.setTextColor(recordingAccentColor)
             applyMicrophoneVisualState(MicrophoneVisualState.RECORDING)
@@ -510,6 +518,7 @@ class VoiceKeyboardView(
         currentState = KeyboardState.PROCESSING
         isCurrentlyRecording = false
         post {
+            clearPendingStatusReset()
             statusText.text = "Processing..."
             statusText.setTextColor(processingAccentColor)
             applyMicrophoneVisualState(MicrophoneVisualState.PROCESSING)
@@ -527,6 +536,7 @@ class VoiceKeyboardView(
         currentState = KeyboardState.ERROR
         isCurrentlyRecording = false
         post {
+            clearPendingStatusReset()
             statusText.text = "❌ Error: $message"
             statusText.setTextColor(Color.parseColor("#F44336"))
             statusText.textSize = 13f  // Slightly smaller for longer messages
@@ -549,6 +559,7 @@ class VoiceKeyboardView(
         currentState = KeyboardState.SUCCESS
         isCurrentlyRecording = false
         post {
+            clearPendingStatusReset()
             statusText.text = "✅ Text inserted successfully!"
             statusText.setTextColor(Color.parseColor("#4CAF50"))
             applyMicrophoneVisualState(MicrophoneVisualState.READY)
@@ -563,6 +574,7 @@ class VoiceKeyboardView(
 
     fun showStatus(message: String) {
         post {
+            clearPendingStatusReset()
             statusText.text = message
             when (currentState) {
                 KeyboardState.RECORDING -> statusText.setTextColor(recordingAccentColor)
@@ -578,6 +590,25 @@ class VoiceKeyboardView(
         post {
             statusText.text = "⚠️ $message"
             statusText.setTextColor(Color.parseColor("#FF9800"))
+        }
+    }
+
+    fun showTemporaryStatus(message: String, durationMs: Long = 5000L) {
+        post {
+            clearPendingStatusReset()
+            statusText.text = message
+            statusText.setTextColor(Color.parseColor("#FFFFFF"))
+            if (currentState == KeyboardState.READY) {
+                val runnable = Runnable {
+                    if (currentState == KeyboardState.READY) {
+                        statusText.text = "Ready to speak"
+                        statusText.setTextColor(Color.parseColor("#FFFFFF"))
+                    }
+                    statusResetRunnable = null
+                }
+                statusResetRunnable = runnable
+                statusText.postDelayed(runnable, durationMs)
+            }
         }
     }
 
