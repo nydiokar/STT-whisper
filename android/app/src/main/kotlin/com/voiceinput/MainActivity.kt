@@ -6,6 +6,7 @@ import android.os.Bundle
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.view.inputmethod.InputMethodManager
 import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
 import androidx.recyclerview.widget.LinearLayoutManager
@@ -71,6 +72,13 @@ class MainActivity : AppCompatActivity() {
         container.addView(fab)
 
         setContentView(container)
+
+        adapter = NotesAdapter(
+            onDelete = { note -> confirmDelete(note) },
+            onShare = { note -> shareNote(note) },
+            onEdit = { note, newText -> handleNoteEdit(note, newText) }
+        )
+        recyclerView.adapter = adapter
 
         loadNotes()
     }
@@ -212,18 +220,15 @@ class MainActivity : AppCompatActivity() {
         if (notes.isEmpty()) {
             recyclerView.visibility = View.GONE
             emptyView.visibility = View.VISIBLE
+            adapter.submitNotes(emptyList())
         } else {
             recyclerView.visibility = View.VISIBLE
             emptyView.visibility = View.GONE
-
-            adapter = NotesAdapter(notes) { note ->
-                handleNoteAction(note)
-            }
-            recyclerView.adapter = adapter
+            adapter.submitNotes(notes)
         }
     }
 
-    private fun handleNoteAction(note: Note) {
+    private fun confirmDelete(note: Note) {
         // Show delete confirmation dialog with cosmos theme
         android.app.AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog)
             .setTitle("Delete Note")
@@ -235,6 +240,36 @@ class MainActivity : AppCompatActivity() {
             }
             .setNegativeButton("Cancel", null)
             .show()
+    }
+
+    private fun shareNote(note: Note) {
+        val shareIntent = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_SUBJECT, "Voice note")
+            putExtra(Intent.EXTRA_TEXT, note.text)
+        }
+        startActivity(Intent.createChooser(shareIntent, "Share note"))
+    }
+
+    private fun handleNoteEdit(note: Note, newText: String) {
+        val trimmed = newText.trim()
+        if (trimmed.isEmpty()) {
+            Toast.makeText(this, "Note cannot be empty", Toast.LENGTH_SHORT).show()
+            adapter.refreshNote(note)
+            return
+        }
+
+        if (trimmed == note.text) {
+            adapter.refreshNote(note)
+            return
+        }
+
+        val updated = note.copy(text = trimmed, charCount = trimmed.length)
+        repository.updateNote(updated)
+        repository.getNoteById(updated.id)?.let {
+            adapter.updateNote(it)
+        }
+        Toast.makeText(this, "Note updated", Toast.LENGTH_SHORT).show()
     }
 
     private fun dpToPx(dp: Int): Int {
@@ -251,17 +286,20 @@ class MainActivity : AppCompatActivity() {
  * - Proper spacing
  */
 class NotesAdapter(
-    private val notes: List<Note>,
-    private val onNoteClick: (Note) -> Unit
+    private val onDelete: (Note) -> Unit,
+    private val onShare: (Note) -> Unit,
+    private val onEdit: (Note, String) -> Unit
 ) : RecyclerView.Adapter<NotesAdapter.NoteViewHolder>() {
 
     private val dateFormat = SimpleDateFormat("MMM dd, yyyy • HH:mm", Locale.getDefault())
-    private val expandedPositions = mutableSetOf<Int>()
+    private val expandedNoteIds = mutableSetOf<String>()
+    private val editingNoteIds = mutableSetOf<String>()
+    private val notes = mutableListOf<Note>()
 
     inner class NoteViewHolder(val view: LinearLayout) : RecyclerView.ViewHolder(view) {
         val previewText: TextView = view.findViewById(1)
         val timestampText: TextView = view.findViewById(2)
-        val fullText: TextView = view.findViewById(3)
+        val fullText: EditText = view.findViewById(3)
         val metadataText: TextView = view.findViewById(4)
         val actionsRow: LinearLayout = view.findViewById(5)
     }
@@ -310,13 +348,17 @@ class NotesAdapter(
         }
 
         // Full text (hidden by default)
-        val fullText = TextView(parent.context).apply {
+        val fullText = EditText(parent.context).apply {
             id = 3
             textSize = 15f
             setTextColor(Color.parseColor("#e0e0e0"))
             visibility = View.GONE
             setPadding(0, dpToPx(8), 0, 0)
             setLineSpacing(dpToPx(2).toFloat(), 1f)
+            isFocusable = false
+            isFocusableInTouchMode = false
+            isCursorVisible = false
+            background = null
         }
 
         // Metadata (char count + duration) - hidden by default
@@ -348,27 +390,45 @@ class NotesAdapter(
 
     override fun onBindViewHolder(holder: NoteViewHolder, position: Int) {
         val note = notes[position]
-        val isExpanded = expandedPositions.contains(position)
+        val isExpanded = expandedNoteIds.contains(note.id)
+        val isEditing = editingNoteIds.contains(note.id)
+        holder.fullText.setText(note.text)
 
         // Show preview or full text based on expansion state
         if (isExpanded) {
             holder.previewText.visibility = View.GONE
             holder.fullText.visibility = View.VISIBLE
-            holder.fullText.text = note.text
+            holder.fullText.setSelection(holder.fullText.text?.length ?: 0)
             holder.metadataText.visibility = View.VISIBLE
             holder.metadataText.text = "${note.charCount} chars" +
                 if (note.durationSec != null) " • ${note.durationSec} sec" else ""
             holder.actionsRow.visibility = View.VISIBLE
-
-            // Add action buttons if not already added
-            if (holder.actionsRow.childCount == 0) {
-                holder.actionsRow.addView(createActionButton(holder.view.context, "📋 Copy") {
-                    copyToClipboard(holder.view.context, note.text)
-                })
-                holder.actionsRow.addView(createActionButton(holder.view.context, "🗑️ Delete") {
-                    onNoteClick(note)
-                })
+            holder.fullText.isFocusable = isEditing
+            holder.fullText.isFocusableInTouchMode = isEditing
+            holder.fullText.isCursorVisible = isEditing
+            holder.fullText.isEnabled = true
+            if (!isEditing) {
+                holder.fullText.clearFocus()
             }
+
+            holder.actionsRow.removeAllViews()
+            val editLabel = if (isEditing) "✅ Done" else "✏️ Edit"
+            holder.actionsRow.addView(createActionButton(holder.view.context, editLabel) {
+                if (isEditing) {
+                    completeInlineEdit(holder, note)
+                } else {
+                    beginInlineEdit(holder, note)
+                }
+            })
+            holder.actionsRow.addView(createActionButton(holder.view.context, "📤 Share") {
+                onShare(note)
+            })
+            holder.actionsRow.addView(createActionButton(holder.view.context, "📋 Copy") {
+                copyToClipboard(holder.view.context, note.text)
+            })
+            holder.actionsRow.addView(createActionButton(holder.view.context, "🗑️ Delete") {
+                onDelete(note)
+            })
         } else {
             holder.previewText.visibility = View.VISIBLE
             holder.fullText.visibility = View.GONE
@@ -385,18 +445,49 @@ class NotesAdapter(
 
         holder.timestampText.text = dateFormat.format(Date(note.createdAt))
 
+        holder.fullText.onFocusChangeListener = View.OnFocusChangeListener { v, hasFocus ->
+            if (!hasFocus && editingNoteIds.contains(note.id)) {
+                completeInlineEdit(holder, note)
+            }
+        }
+
         // Toggle expansion on click
         holder.view.setOnClickListener {
-            if (expandedPositions.contains(position)) {
-                expandedPositions.remove(position)
+            if (expandedNoteIds.contains(note.id)) {
+                expandedNoteIds.remove(note.id)
+                editingNoteIds.remove(note.id)
             } else {
-                expandedPositions.add(position)
+                expandedNoteIds.add(note.id)
             }
             notifyItemChanged(position)
         }
     }
 
     override fun getItemCount() = notes.size
+
+    fun submitNotes(newNotes: List<Note>) {
+        notes.clear()
+        notes.addAll(newNotes)
+        val currentIds = notes.map { it.id }.toSet()
+        expandedNoteIds.retainAll(currentIds)
+        editingNoteIds.retainAll(currentIds)
+        notifyDataSetChanged()
+    }
+
+    fun updateNote(updated: Note) {
+        val index = notes.indexOfFirst { it.id == updated.id }
+        if (index != -1) {
+            notes[index] = updated
+            notifyItemChanged(index)
+        }
+    }
+
+    fun refreshNote(note: Note) {
+        val index = notes.indexOfFirst { it.id == note.id }
+        if (index != -1) {
+            notifyItemChanged(index)
+        }
+    }
 
     private fun createActionButton(context: android.content.Context, text: String, onClick: () -> Unit): TextView {
         return TextView(context).apply {
@@ -421,11 +512,44 @@ class NotesAdapter(
         }
     }
 
+    private fun beginInlineEdit(holder: NoteViewHolder, note: Note) {
+        editingNoteIds.add(note.id)
+        holder.fullText.isFocusable = true
+        holder.fullText.isFocusableInTouchMode = true
+        holder.fullText.isCursorVisible = true
+        holder.fullText.requestFocus()
+        holder.fullText.setSelection(holder.fullText.text?.length ?: 0)
+        showKeyboard(holder.fullText)
+        holder.adapterPosition.takeIf { it != RecyclerView.NO_POSITION }?.let {
+            notifyItemChanged(it)
+        }
+    }
+
+    private fun completeInlineEdit(holder: NoteViewHolder, note: Note) {
+        if (!editingNoteIds.contains(note.id)) return
+        editingNoteIds.remove(note.id)
+        holder.fullText.isCursorVisible = false
+        hideKeyboard(holder.fullText)
+        holder.fullText.clearFocus()
+        val updatedText = holder.fullText.text?.toString() ?: ""
+        onEdit(note, updatedText)
+    }
+
     private fun copyToClipboard(context: android.content.Context, text: String) {
         val clipboard = context.getSystemService(android.content.ClipboardManager::class.java)
         val clip = android.content.ClipData.newPlainText("Note", text)
         clipboard.setPrimaryClip(clip)
         Toast.makeText(context, "Copied to clipboard", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun showKeyboard(view: View) {
+        val imm = view.context.getSystemService(InputMethodManager::class.java)
+        imm?.showSoftInput(view, InputMethodManager.SHOW_IMPLICIT)
+    }
+
+    private fun hideKeyboard(view: View) {
+        val imm = view.context.getSystemService(InputMethodManager::class.java)
+        imm?.hideSoftInputFromWindow(view.windowToken, 0)
     }
 
     private fun dpToPx(dp: Int): Int {
