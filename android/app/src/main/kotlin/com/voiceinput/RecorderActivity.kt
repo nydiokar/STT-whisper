@@ -11,7 +11,6 @@ import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
-import com.voiceinput.config.AppConfig
 import com.voiceinput.core.AudioRecorder
 import com.voiceinput.core.WhisperEngine
 import com.voiceinput.data.Note
@@ -19,6 +18,10 @@ import com.voiceinput.data.NotesRepository
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.collect
 import android.util.Log
+import android.graphics.drawable.GradientDrawable
+import com.voiceinput.ime.AudioVisualizerView
+import java.util.Locale
+import kotlin.math.max
 
 /**
  * Full-screen recording activity for creating voice notes
@@ -30,16 +33,26 @@ class RecorderActivity : AppCompatActivity() {
     private var whisperEngine: WhisperEngine? = null
 
     private lateinit var statusText: TextView
+    private lateinit var timerText: TextView
     private lateinit var transcriptionText: TextView
     private lateinit var recordButton: FrameLayout
+    private lateinit var recordIcon: TextView
+    private lateinit var audioVisualizer: AudioVisualizerView
+    private lateinit var cancelRecordingButton: TextView
     private lateinit var bottomBar: LinearLayout
     private lateinit var saveButton: TextView
-    private lateinit var discardButton: TextView
+
+    private val readyGradientColors = intArrayOf(Color.parseColor("#5B86E5"), Color.parseColor("#36D1DC"))
+    private val recordingGradientColors = intArrayOf(Color.parseColor("#FDC830"), Color.parseColor("#F37335"))
+    private val processingGradientColors = intArrayOf(Color.parseColor("#8E2DE2"), Color.parseColor("#4A00E0"))
+    private val recordingAccentColor = Color.parseColor("#FFE082")
+    private val processingAccentColor = Color.parseColor("#B39DDB")
 
     private var isRecording = false
     private var currentTranscription = ""
     private var recordingStartTime: Long = 0
     private var recordingJob: Job? = null
+    private var timerJob: Job? = null
 
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
@@ -109,16 +122,67 @@ class RecorderActivity : AppCompatActivity() {
                 bottomMargin = dpToPx(80)
             }
 
-            // Status text
-            statusText = TextView(this@RecorderActivity).apply {
-                text = "Tap to record"
-                textSize = 18f
-                setTextColor(Color.parseColor("#a0a0a0")) // Match MainActivity dimmer gray
+            // Status + timer row
+            val statusRow = LinearLayout(this@RecorderActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER
             }
 
+            statusText = TextView(this@RecorderActivity).apply {
+                text = "Tap to record"
+                textSize = 18f
+                setTextColor(Color.parseColor("#a0a0a0"))
+                gravity = Gravity.CENTER
+            }
+
+            timerText = TextView(this@RecorderActivity).apply {
+                text = "00:00"
+                textSize = 16f
+                setTextColor(Color.parseColor("#a0a0a0"))
+                setPadding(dpToPx(12), 0, 0, 0)
+                gravity = Gravity.CENTER
+                visibility = View.GONE
+            }
+
+            statusRow.addView(statusText)
+            statusRow.addView(timerText)
+
             // Record button (large circle)
             recordButton = createRecordButton()
+
+            // Visualizer + cancel alignment
+            val visualizerRow = LinearLayout(this@RecorderActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply {
+                    bottomMargin = dpToPx(16)
+                }
+            }
+
+            audioVisualizer = AudioVisualizerView(this@RecorderActivity).apply {
+                layoutParams = LinearLayout.LayoutParams(0, dpToPx(56), 1f)
+                alpha = 0.9f
+            }
+
+            cancelRecordingButton = TextView(this@RecorderActivity).apply {
+                text = "✕"
+                textSize = 20f
+                setTextColor(Color.parseColor("#e0e0e0"))
+                gravity = Gravity.CENTER
+                contentDescription = "Cancel recording"
+                layoutParams = LinearLayout.LayoutParams(dpToPx(40), dpToPx(40)).apply {
+                    leftMargin = dpToPx(12)
+                }
+                setOnClickListener {
+                    handleCancelTapped()
+                }
+            }
+
+            visualizerRow.addView(audioVisualizer)
+            visualizerRow.addView(cancelRecordingButton)
 
             // Transcription text
             transcriptionText = TextView(this@RecorderActivity).apply {
@@ -130,8 +194,9 @@ class RecorderActivity : AppCompatActivity() {
                 visibility = View.GONE
             }
 
-            addView(statusText)
+            addView(statusRow)
             addView(recordButton)
+            addView(visualizerRow)
             addView(transcriptionText)
         }
 
@@ -189,24 +254,21 @@ class RecorderActivity : AppCompatActivity() {
                 bottomMargin = dpToPx(32)
             }
 
-            // Green circle when ready (matching IME ready state)
-            background = android.graphics.drawable.GradientDrawable().apply {
-                shape = android.graphics.drawable.GradientDrawable.OVAL
-                setColor(Color.parseColor("#4CAF50")) // Green accent
-            }
+            background = createCometDrawable(RecordingVisualState.READY)
 
-            // Mic icon
-            val micIcon = TextView(this@RecorderActivity).apply {
-                text = "🎤"
-                textSize = 48f
+            // Comet icon to keep the cosmic theme fun but calm
+            recordIcon = TextView(this@RecorderActivity).apply {
+                text = "☄"
+                textSize = 44f
                 gravity = Gravity.CENTER
+                setTextColor(Color.WHITE)
                 layoutParams = FrameLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.MATCH_PARENT
                 )
             }
 
-            addView(micIcon)
+            addView(recordIcon)
 
             setOnClickListener {
                 toggleRecording()
@@ -214,10 +276,44 @@ class RecorderActivity : AppCompatActivity() {
         }
     }
 
+    private enum class RecordingVisualState {
+        READY,
+        RECORDING,
+        PROCESSING
+    }
+
+    private fun createCometDrawable(state: RecordingVisualState): GradientDrawable {
+        val colors = when (state) {
+            RecordingVisualState.READY -> readyGradientColors
+            RecordingVisualState.RECORDING -> recordingGradientColors
+            RecordingVisualState.PROCESSING -> processingGradientColors
+        }
+
+        return GradientDrawable(GradientDrawable.Orientation.TL_BR, colors).apply {
+            shape = GradientDrawable.OVAL
+        }
+    }
+
+    private fun updateRecordButtonAppearance(state: RecordingVisualState) {
+        recordButton.background = createCometDrawable(state)
+        val iconAlpha = when (state) {
+            RecordingVisualState.READY -> 1f
+            RecordingVisualState.RECORDING -> 1f
+            RecordingVisualState.PROCESSING -> 0.85f
+        }
+        val iconColor = when (state) {
+            RecordingVisualState.READY -> Color.WHITE
+            RecordingVisualState.RECORDING -> Color.parseColor("#FFFAF0")
+            RecordingVisualState.PROCESSING -> Color.parseColor("#EDE7F6")
+        }
+        recordIcon.alpha = iconAlpha
+        recordIcon.setTextColor(iconColor)
+    }
+
     private fun createBottomBar(): LinearLayout {
         return LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER
+            gravity = Gravity.END
             setPadding(dpToPx(24), dpToPx(16), dpToPx(24), dpToPx(16))
             layoutParams = FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -226,22 +322,6 @@ class RecorderActivity : AppCompatActivity() {
                 gravity = Gravity.BOTTOM
             }
             visibility = View.GONE
-
-            // Discard button
-            discardButton = TextView(this@RecorderActivity).apply {
-                text = "Discard"
-                textSize = 16f
-                setTextColor(Color.parseColor("#FF6B6B"))
-                setPadding(dpToPx(24), dpToPx(12), dpToPx(24), dpToPx(12))
-                setOnClickListener {
-                    discardRecording()
-                }
-            }
-
-            // Spacer
-            val spacer = View(this@RecorderActivity).apply {
-                layoutParams = LinearLayout.LayoutParams(0, 1, 1f)
-            }
 
             // Save button
             saveButton = TextView(this@RecorderActivity).apply {
@@ -254,8 +334,6 @@ class RecorderActivity : AppCompatActivity() {
                 }
             }
 
-            addView(discardButton)
-            addView(spacer)
             addView(saveButton)
         }
     }
@@ -293,6 +371,29 @@ class RecorderActivity : AppCompatActivity() {
         }
     }
 
+    private fun handleCancelTapped() {
+        discardRecording()
+    }
+
+    private fun startTimer() {
+        timerJob?.cancel()
+        timerJob = scope.launch {
+            while (isActive && isRecording) {
+                val elapsedMs = System.currentTimeMillis() - recordingStartTime
+                val formatted = formatDuration(elapsedMs)
+                timerText.text = formatted
+                delay(1000)
+            }
+        }
+    }
+
+    private fun formatDuration(durationMs: Long): String {
+        val totalSeconds = max(0L, durationMs / 1000L)
+        val minutes = totalSeconds / 60
+        val seconds = totalSeconds % 60
+        return String.format(Locale.US, "%02d:%02d", minutes, seconds)
+    }
+
     private fun startRecording() {
         if (audioRecorder == null || whisperEngine == null) {
             Toast.makeText(this, "Speech recognition not ready", Toast.LENGTH_SHORT).show()
@@ -302,14 +403,17 @@ class RecorderActivity : AppCompatActivity() {
         isRecording = true
         recordingStartTime = System.currentTimeMillis()
 
-        statusText.text = "Recording..."
-        statusText.setTextColor(Color.parseColor("#FF6B6B"))
-
-        // Change button to red circle (not square!) matching IME recording state
-        recordButton.background = android.graphics.drawable.GradientDrawable().apply {
-            shape = android.graphics.drawable.GradientDrawable.OVAL
-            setColor(Color.parseColor("#f44336")) // Error red from spec
+        statusText.text = "Recording"
+        statusText.setTextColor(recordingAccentColor)
+        timerText.apply {
+            visibility = View.VISIBLE
+            setTextColor(recordingAccentColor)
+            text = "00:00"
         }
+        startTimer()
+
+        // Calmer comet-style appearance while recording
+        updateRecordButtonAppearance(RecordingVisualState.RECORDING)
 
         val recorder = audioRecorder ?: return
         val started = recorder.start()
@@ -327,6 +431,9 @@ class RecorderActivity : AppCompatActivity() {
                     // Audio is being collected by AudioRecorder
                     // We just need to keep the stream alive
                     Log.d(TAG, "Collected audio chunk: ${chunk.size} bytes")
+                    withContext(Dispatchers.Main) {
+                        audioVisualizer.updateAudioData(chunk)
+                    }
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Recording error", e)
@@ -342,6 +449,8 @@ class RecorderActivity : AppCompatActivity() {
         isRecording = false
         recordingJob?.cancel()
         recordingJob = null
+        timerJob?.cancel()
+        timerJob = null
 
         scope.launch(Dispatchers.IO) {
             try {
@@ -349,7 +458,10 @@ class RecorderActivity : AppCompatActivity() {
 
                 runOnUiThread {
                     statusText.text = "Processing..."
-                    statusText.setTextColor(Color.GRAY)
+                    statusText.setTextColor(processingAccentColor)
+                    updateRecordButtonAppearance(RecordingVisualState.PROCESSING)
+                    audioVisualizer.clear()
+                    timerText.setTextColor(processingAccentColor)
                 }
 
                 // Transcribe the audio
@@ -362,24 +474,23 @@ class RecorderActivity : AppCompatActivity() {
                             transcriptionText.text = result.text
                             transcriptionText.visibility = View.VISIBLE
                             statusText.text = "Recording complete"
+                            statusText.setTextColor(Color.parseColor("#e0e0e0"))
                             bottomBar.visibility = View.VISIBLE
+                            timerText.setTextColor(Color.parseColor("#e0e0e0"))
                         } else {
                             statusText.text = "No speech detected"
+                            statusText.setTextColor(Color.parseColor("#e0e0e0"))
+                            timerText.visibility = View.GONE
                         }
 
-                        // Reset button to green ready state
-                        recordButton.background = android.graphics.drawable.GradientDrawable().apply {
-                            shape = android.graphics.drawable.GradientDrawable.OVAL
-                            setColor(Color.parseColor("#4CAF50"))
-                        }
+                        updateRecordButtonAppearance(RecordingVisualState.READY)
                     }
                 } else {
                     runOnUiThread {
                         statusText.text = "No audio recorded"
-                        recordButton.background = android.graphics.drawable.GradientDrawable().apply {
-                            shape = android.graphics.drawable.GradientDrawable.OVAL
-                            setColor(Color.parseColor("#4CAF50"))
-                        }
+                        statusText.setTextColor(Color.parseColor("#e0e0e0"))
+                        updateRecordButtonAppearance(RecordingVisualState.READY)
+                        timerText.visibility = View.GONE
                     }
                 }
             } catch (e: Exception) {
@@ -411,8 +522,27 @@ class RecorderActivity : AppCompatActivity() {
     }
 
     private fun discardRecording() {
-        resetRecording()
-        finish()
+        recordingJob?.cancel()
+        recordingJob = null
+        timerJob?.cancel()
+        timerJob = null
+
+        if (isRecording) {
+            scope.launch(Dispatchers.IO) {
+                try {
+                    audioRecorder?.stop()
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error cancelling recording", e)
+                }
+                withContext(Dispatchers.Main) {
+                    resetRecording()
+                    finish()
+                }
+            }
+        } else {
+            resetRecording()
+            finish()
+        }
     }
 
     private fun resetRecording() {
@@ -423,11 +553,17 @@ class RecorderActivity : AppCompatActivity() {
         statusText.text = "Tap to record"
         statusText.setTextColor(Color.GRAY)
         bottomBar.visibility = View.GONE
-
-        recordButton.background = android.graphics.drawable.GradientDrawable().apply {
-            shape = android.graphics.drawable.GradientDrawable.OVAL
-            setColor(Color.parseColor("#4CAF50"))
+        audioVisualizer.clear()
+        recordingStartTime = 0L
+        timerJob?.cancel()
+        timerJob = null
+        timerText.apply {
+            visibility = View.GONE
+            text = "00:00"
+            setTextColor(Color.parseColor("#a0a0a0"))
         }
+
+        updateRecordButtonAppearance(RecordingVisualState.READY)
     }
 
     override fun onDestroy() {
@@ -438,6 +574,7 @@ class RecorderActivity : AppCompatActivity() {
         }
         audioRecorder?.release()
         whisperEngine?.release()
+        timerJob?.cancel()
         scope.cancel()
     }
 
