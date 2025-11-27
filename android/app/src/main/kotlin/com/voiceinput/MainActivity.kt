@@ -680,7 +680,7 @@ class NotesAdapter(
         val timestampText: TextView = view.findViewById(2)
         val fullText: EditText = view.findViewById(3)
         val metadataText: TextView = view.findViewById(4)
-        val actionsRow: LinearLayout = view.findViewById(5)
+        val menuButton: ImageButton = view.findViewById(5)
     }
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): NoteViewHolder {
@@ -710,21 +710,38 @@ class NotesAdapter(
         }
 
         // Preview text (first 60 chars)
+        val headerRow = LinearLayout(parent.context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+
         val preview = TextView(parent.context).apply {
             id = 1
             textSize = 15f
             setTextColor(Color.parseColor("#e0e0e0")) // Light gray
             maxLines = 2
             setLineSpacing(dpToPx(2).toFloat(), 1f)
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         }
 
-        // Timestamp
         val timestamp = TextView(parent.context).apply {
             id = 2
             textSize = 12f
             setTextColor(Color.parseColor("#a0a0a0")) // Dimmer gray
-            setPadding(0, dpToPx(6), 0, 0)
+            setPadding(0, dpToPx(6), dpToPx(8), 0)
         }
+
+        val menuButton = ImageButton(parent.context).apply {
+            id = 5
+            setImageResource(android.R.drawable.ic_menu_more)
+            background = null
+            setColorFilter(Color.parseColor("#e0e0e0"))
+            setPadding(dpToPx(4), dpToPx(4), dpToPx(4), dpToPx(4))
+        }
+
+        headerRow.addView(preview)
+        headerRow.addView(timestamp)
+        headerRow.addView(menuButton)
 
         // Full text (hidden by default)
         val fullText = EditText(parent.context).apply {
@@ -749,20 +766,9 @@ class NotesAdapter(
             setPadding(0, dpToPx(6), 0, 0)
         }
 
-        // Actions row (hidden by default)
-        val actionsRow = LinearLayout(parent.context).apply {
-            id = 5
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.END
-            visibility = View.GONE
-            setPadding(0, dpToPx(12), 0, 0)
-        }
-
-        container.addView(preview)
-        container.addView(timestamp)
+        container.addView(headerRow)
         container.addView(fullText)
         container.addView(metadata)
-        container.addView(actionsRow)
 
         return NoteViewHolder(container)
     }
@@ -789,7 +795,6 @@ class NotesAdapter(
                 metaBits.add("★ Favorite")
             }
             holder.metadataText.text = metaBits.joinToString(" • ")
-            holder.actionsRow.visibility = View.VISIBLE
             holder.fullText.isFocusable = isEditing
             holder.fullText.isFocusableInTouchMode = isEditing
             holder.fullText.isCursorVisible = isEditing
@@ -807,18 +812,10 @@ class NotesAdapter(
                     }
                 }
             }
-
-            holder.actionsRow.removeAllViews()
-            val actionsButton = createActionButton(holder.view.context, "⋮ Actions") {}
-            holder.actionsRow.addView(actionsButton)
-            actionsButton.setOnClickListener {
-                showActionsMenu(actionsButton, note, holder)
-            }
         } else {
             holder.previewText.visibility = View.VISIBLE
             holder.fullText.visibility = View.GONE
             holder.metadataText.visibility = View.GONE
-            holder.actionsRow.visibility = View.GONE
             holder.fullText.tag = null
 
             val preview = if (note.text.length > 60) {
@@ -830,6 +827,9 @@ class NotesAdapter(
         }
 
         holder.timestampText.text = dateFormat.format(Date(note.createdAt))
+        holder.menuButton.setOnClickListener {
+            showActionsMenu(holder.menuButton, note, holder)
+        }
 
         holder.fullText.onFocusChangeListener = View.OnFocusChangeListener { _, hasFocus ->
             if (!hasFocus && editingNoteIds.contains(note.id)) {
