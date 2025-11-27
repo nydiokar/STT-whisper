@@ -438,11 +438,11 @@ class MainActivity : AppCompatActivity() {
     private fun updateFilterUI() {
         if (!::favoritesToggle.isInitialized) return
         if (showFavoritesOnly) {
-            favoritesToggle.text = "★ Favorites"
+            favoritesToggle.text = "★"
             favoritesToggle.setTextColor(Color.parseColor("#FFD54F"))
             (favoritesToggle.background as? GradientDrawable)?.setColor(Color.parseColor("#3a2f1f"))
         } else {
-            favoritesToggle.text = "☆ Favorites"
+            favoritesToggle.text = "☆"
             favoritesToggle.setTextColor(Color.parseColor("#e0e0e0"))
             (favoritesToggle.background as? GradientDrawable)?.setColor(Color.parseColor("#2b2b45"))
         }
