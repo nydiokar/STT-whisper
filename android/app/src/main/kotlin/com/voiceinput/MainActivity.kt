@@ -15,7 +15,6 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.FileProvider
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
-import com.voiceinput.BuildConfig
 import com.voiceinput.data.Note
 import com.voiceinput.data.NotesRepository
 import java.text.SimpleDateFormat
@@ -330,6 +329,11 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun updateEmptyState(message: String, hint: String) {
+        emptyMessage.text = message
+        emptyHint.text = hint
+    }
+
     private fun confirmDelete(note: Note) {
         // Show delete confirmation dialog with cosmos theme
         android.app.AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog)
@@ -398,7 +402,7 @@ class MainActivity : AppCompatActivity() {
             val file = File(cacheDir, fileName)
             file.writeText(exportText)
 
-            val uri = FileProvider.getUriForFile(this, "${BuildConfig.APPLICATION_ID}.fileprovider", file)
+            val uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
             val intent = Intent(Intent.ACTION_SEND).apply {
                 type = "text/plain"
                 putExtra(Intent.EXTRA_SUBJECT, "Voice notes export")
@@ -735,11 +739,6 @@ class NotesAdapter(
     private fun hideKeyboard(view: View) {
         val imm = view.context.getSystemService(InputMethodManager::class.java)
         imm?.hideSoftInputFromWindow(view.windowToken, 0)
-    }
-
-    private fun updateEmptyState(message: String, hint: String) {
-        emptyMessage.text = message
-        emptyHint.text = hint
     }
 
     private fun dpToPx(dp: Int): Int {
