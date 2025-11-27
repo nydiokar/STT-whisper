@@ -20,6 +20,8 @@ import kotlinx.coroutines.flow.collect
 import android.util.Log
 import android.graphics.drawable.GradientDrawable
 import com.voiceinput.ime.AudioVisualizerView
+import android.view.animation.Animation
+import android.view.animation.ScaleAnimation
 import java.util.Locale
 import kotlin.math.max
 
@@ -47,8 +49,10 @@ class RecorderActivity : AppCompatActivity() {
     private val processingGradientColors = intArrayOf(Color.parseColor("#8E2DE2"), Color.parseColor("#4A00E0"))
     private val recordingAccentColor = Color.parseColor("#FFE082")
     private val processingAccentColor = Color.parseColor("#B39DDB")
+    private var processingPulseAnimation: Animation? = null
 
     private var isRecording = false
+    private var isProcessingState = false
     private var currentTranscription = ""
     private var recordingStartTime: Long = 0
     private var recordingJob: Job? = null
@@ -308,6 +312,43 @@ class RecorderActivity : AppCompatActivity() {
         }
         recordIcon.alpha = iconAlpha
         recordIcon.setTextColor(iconColor)
+
+        if (state == RecordingVisualState.PROCESSING) {
+            startProcessingPulse()
+        } else {
+            stopProcessingPulse()
+        }
+    }
+
+    private fun startProcessingPulse() {
+        if (processingPulseAnimation == null) {
+            processingPulseAnimation = ScaleAnimation(
+                1f,
+                1.08f,
+                1f,
+                1.08f,
+                Animation.RELATIVE_TO_SELF,
+                0.5f,
+                Animation.RELATIVE_TO_SELF,
+                0.5f
+            ).apply {
+                duration = 900
+                repeatCount = Animation.INFINITE
+                repeatMode = Animation.REVERSE
+                interpolator = android.view.animation.AccelerateDecelerateInterpolator()
+            }
+        }
+        recordButton.startAnimation(processingPulseAnimation)
+    }
+
+    private fun stopProcessingPulse() {
+        recordButton.clearAnimation()
+    }
+
+    private fun setProcessingState(active: Boolean) {
+        isProcessingState = active
+        cancelRecordingButton.isEnabled = !active
+        cancelRecordingButton.alpha = if (active) 0.3f else 0.9f
     }
 
     private fun createBottomBar(): LinearLayout {
@@ -364,6 +405,10 @@ class RecorderActivity : AppCompatActivity() {
     }
 
     private fun toggleRecording() {
+        if (isProcessingState) {
+            Toast.makeText(this, "Processing current note...", Toast.LENGTH_SHORT).show()
+            return
+        }
         if (isRecording) {
             stopRecording()
         } else {
@@ -402,6 +447,7 @@ class RecorderActivity : AppCompatActivity() {
 
         isRecording = true
         recordingStartTime = System.currentTimeMillis()
+        isProcessingState = false
 
         statusText.text = "Recording"
         statusText.setTextColor(recordingAccentColor)
@@ -457,6 +503,7 @@ class RecorderActivity : AppCompatActivity() {
                 val recordedAudio = audioRecorder?.stop() ?: ByteArray(0)
 
                 runOnUiThread {
+                    setProcessingState(true)
                     statusText.text = "Processing..."
                     statusText.setTextColor(processingAccentColor)
                     updateRecordButtonAppearance(RecordingVisualState.PROCESSING)
@@ -484,6 +531,7 @@ class RecorderActivity : AppCompatActivity() {
                         }
 
                         updateRecordButtonAppearance(RecordingVisualState.READY)
+                        setProcessingState(false)
                     }
                 } else {
                     runOnUiThread {
@@ -491,6 +539,7 @@ class RecorderActivity : AppCompatActivity() {
                         statusText.setTextColor(Color.parseColor("#e0e0e0"))
                         updateRecordButtonAppearance(RecordingVisualState.READY)
                         timerText.visibility = View.GONE
+                        setProcessingState(false)
                     }
                 }
             } catch (e: Exception) {
@@ -547,6 +596,7 @@ class RecorderActivity : AppCompatActivity() {
 
     private fun resetRecording() {
         isRecording = false
+        isProcessingState = false
         currentTranscription = ""
         transcriptionText.text = ""
         transcriptionText.visibility = View.GONE
@@ -563,6 +613,7 @@ class RecorderActivity : AppCompatActivity() {
             setTextColor(Color.parseColor("#a0a0a0"))
         }
 
+        setProcessingState(false)
         updateRecordButtonAppearance(RecordingVisualState.READY)
     }
 

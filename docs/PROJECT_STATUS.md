@@ -183,7 +183,8 @@ See `CURRENT_STATUS_2025_10_26.md` and `SETTINGS_IMPLEMENTATION_COMPLETE.md` for
 - Displays all saved voice notes in reverse chronological order
 - Cards with #1a1a2e background, elevation/glow, proper spacing
 - Tap to expand/collapse full text (preview shows first 60 chars)
-- Copy notes to clipboard (green action buttons)
+- Inline editing directly in expanded cards (auto-saves on Done or focus loss)
+- Share notes via Android share sheet (copy lives inside the share UI)
 - Delete notes with confirmation dialog
 - Empty state with helpful instructions
 - FAB: GREEN circle with mic icon (matches IME ready state)
@@ -193,11 +194,10 @@ See `CURRENT_STATUS_2025_10_26.md` and `SETTINGS_IMPLEMENTATION_COMPLETE.md` for
 **RecorderActivity (Standalone Recording):**
 - Cosmos gradient background (matches IME perfectly)
 - Full-screen recording interface
-- Large circular mic button:
-  - GREEN circle when ready (#4CAF50 - matches IME)
-  - RED circle when recording (#f44336 - matches IME)
-  - Stays circular (not square!)
+- Comet-themed mic button that shifts gradients between ready/recording/processing
 - Real-time transcription display
+- Inline timer + waveform visualizer row with subtle ✕ cancel affordance
+- Live audio visualizer mirrors IME waveform
 - Save/Discard actions after recording
 - Back navigation to MainActivity
 - Tracks recording duration
@@ -224,33 +224,14 @@ See `CURRENT_STATUS_2025_10_26.md` and `SETTINGS_IMPLEMENTATION_COMPLETE.md` for
 
 ### Known Missing Features (Deferred from Specs)
 
-**RecorderActivity - Missing from FRONTEND_SPECS_SIMPLIFIED.md:**
-
-1. **Pulsing Mic Animation** (Processing State)
-   - **What:** Mic button should pulse when processing transcription
-   - **Where:** Line 127 of `FRONTEND_SPECS_SIMPLIFIED.md`
-   - **Code Example:** Already implemented in IME at `VoiceKeyboardView.kt:442-453`
-   - **Implementation:** Copy pulse animation from VoiceKeyboardView `showReadyState()`
-   - **Estimated:** 15 minutes
-
-2. **Audio Visualizer During Recording**
-   - **What:** Animated waveform bars during recording (like IME)
-   - **Where:** Line 117 of `FRONTEND_SPECS_SIMPLIFIED.md` - `━━▃▅▇█▇▅▃━━━▃▅▇▅▃━━`
-   - **Code:** `AudioVisualizerView.kt` already exists (97 lines, fully functional)
-   - **Implementation:** Add AudioVisualizerView to RecorderActivity layout, call `updateAudioData()` in recording loop
-   - **Estimated:** 30-60 minutes
-
-3. **Timer Display** (Optional)
-   - **What:** Show recording duration in real-time
-   - **Where:** Line 126 mentions "timer"
-   - **Implementation:** Add TextView, update every second during recording
-   - **Estimated:** 15 minutes
+**RecorderActivity - Simplified Spec Parity**
+- ✅ Audio visualizer row wired to live recording data
+- ✅ Inline timer next to status text
+- ✅ Pulsing mic animation during processing state (mirrors IME behavior)
 
 **MainActivity - Future Enhancements:**
 - Search/filter notes (see FRONTEND_SPECS_SIMPLIFIED.md v1.1)
 - Manual note creation
-- Edit existing notes inline
-- Share notes to other apps
 - Export to file
 
 ### Simplified MVP Status (Per FRONTEND_SPECS_SIMPLIFIED.md)
@@ -258,31 +239,26 @@ See `CURRENT_STATUS_2025_10_26.md` and `SETTINGS_IMPLEMENTATION_COMPLETE.md` for
 **Success Criteria from Section 14:**
 - ✅ Can create voice notes via recording (RecorderActivity)
 - ✅ Can view all notes in chronological list (MainActivity)
-- ⏸️ Can edit existing notes (text only) - NOT IMPLEMENTED
+- ✅ Can edit existing notes (text only)
 - ✅ Can delete notes (with confirmation)
-- ⏸️ Can share notes (plain text) - NOT IMPLEMENTED
+- ✅ Can share notes (plain text)
 - ✅ Notes persist across app restarts (NotesRepository)
 - ✅ UI matches IME theme (cosmos dark)
 - ✅ No crashes in normal usage
 
-**Status: 6/8 Complete = 75% MVP Done!**
+**Status: 8/8 Complete = 100% MVP Done!**
 
-**Missing from Simplified Spec:**
-1. Edit notes inline (FRONTEND_SPECS_SIMPLIFIED.md Section 5.2)
-2. Share notes via Android share sheet (Section 5.4)
-3. Audio visualizer in RecorderActivity (Section 4.2)
-4. Pulsing animation when processing (Section 4.2)
+**Remaining spec polish:** ✅ None — RecorderActivity now matches the simplified spec (timer + visualizer + pulsing animation)
 
 **We Built the MVP! Now choose polish or new features:**
 
 ### What's Next (4 Options)
 
-**Option 1: Complete RecorderActivity Per Specs** ⚡
-- Add pulsing animation (15 min)
-- Add audio visualizer (30-60 min)
-- Optional: Add timer (15 min)
-- **Total Estimated:** 1-2 hours
-- **Benefit:** RecorderActivity matches specs completely, professional polish
+**Option 1 (Completed): RecorderActivity Polish** ⚡
+- Added comet-themed mic button with calmer palette
+- Added inline timer, waveform visualizer, and subtle cancel ✕
+- Added pulsing animation during processing
+- **Result:** RecorderActivity matches the simplified spec
 
 **Option 2: Test Different Whisper Models** 🔬
 - Compare TINY vs BASE vs SMALL
@@ -294,8 +270,6 @@ See `CURRENT_STATUS_2025_10_26.md` and `SETTINGS_IMPLEMENTATION_COMPLETE.md` for
 **Option 3: Enhance MainActivity** 📱
 - Add search functionality
 - Manual note creation (text input)
-- Edit existing notes inline
-- Share notes to other apps
 - Export (CSV, TXT)
 - Sort/filter options
 - **Estimated:** 2-3 days
@@ -314,9 +288,9 @@ See `CURRENT_STATUS_2025_10_26.md` and `SETTINGS_IMPLEMENTATION_COMPLETE.md` for
 
 **Phase 1: Complete MVP** (2-3 hours)
 1. ✅ Polish RecorderActivity (Option 1) - 1-2 hours
-2. Add Edit + Share to MainActivity - 1 hour
-   - Edit: Make expanded note text editable, save on focus loss
-   - Share: Standard Android share sheet, plain text
+2. ✅ Add Edit + Share to MainActivity - 1 hour
+   - Edit: inline editing on expanded cards with auto-save
+   - Share: standard Android share sheet
 
 **Result:** 100% Simplified MVP complete, fully polished app!
 
