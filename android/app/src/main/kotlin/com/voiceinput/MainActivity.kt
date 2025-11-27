@@ -94,7 +94,6 @@ class MainActivity : AppCompatActivity() {
         container.addView(emptyView)
         container.addView(topBar)
         container.addView(searchBar)
-        container.addView(filterBar)
         container.addView(fab)
 
         setContentView(container)
@@ -117,7 +116,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun createTopBar(): LinearLayout {
-        return FrameLayout(this).apply {
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
             layoutParams = FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 dpToPx(64)
@@ -129,7 +129,7 @@ class MainActivity : AppCompatActivity() {
             val iconRow = LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
-                layoutParams = FrameLayout.LayoutParams(
+                layoutParams = LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT
                 ).apply {
@@ -168,7 +168,6 @@ class MainActivity : AppCompatActivity() {
             iconRow.addView(manualNoteButton)
             iconRow.addView(exportButton)
             iconRow.addView(settingsButton)
-
             addView(iconRow)
         }
     }
