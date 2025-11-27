@@ -14,5 +14,5 @@ data class Note(
     val charCount: Int = text.length,
     val durationSec: Int? = null, // Only for STT notes
     val isFavorite: Boolean = false,
-    val tags: List<String> = emptyList()
+    val tags: List<String>? = emptyList()
 )

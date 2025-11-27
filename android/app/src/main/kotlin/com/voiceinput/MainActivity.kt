@@ -38,7 +38,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var emptyMessage: TextView
     private lateinit var emptyHint: TextView
     private lateinit var searchInput: EditText
-    private lateinit var filterBar: LinearLayout
     private lateinit var favoritesToggle: TextView
     private lateinit var sortSpinner: Spinner
     private lateinit var adapter: NotesAdapter
@@ -66,12 +65,11 @@ class MainActivity : AppCompatActivity() {
             setBackgroundResource(R.drawable.cosmos_gradient)
         }
 
-        // Top bar
+        // Top bar (floating controls)
         val topBar = createTopBar()
 
-        // Search bar
+        // Search + filter row
         val searchBar = createSearchBar()
-        filterBar = createFilterBar()
 
         // RecyclerView for notes
         recyclerView = RecyclerView(this).apply {
@@ -80,7 +78,7 @@ class MainActivity : AppCompatActivity() {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT
             ).apply {
-                topMargin = dpToPx(56 + 64 + 48) // Top bar + search + filters
+                topMargin = dpToPx(64 + 56) // floating controls offset
             }
             setPadding(dpToPx(16), dpToPx(8), dpToPx(16), dpToPx(88))
             clipToPadding = false
@@ -119,58 +117,68 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun createTopBar(): LinearLayout {
-        return LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setBackgroundColor(Color.parseColor("#1a1a2e")) // Slightly lighter than bg
-            setPadding(dpToPx(16), dpToPx(12), dpToPx(16), dpToPx(12))
+        return FrameLayout(this).apply {
             layoutParams = FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
-                dpToPx(56)
+                dpToPx(64)
             ).apply {
                 gravity = Gravity.TOP
+                topMargin = dpToPx(16)
             }
 
-            // App title
-            val title = TextView(this@MainActivity).apply {
-                text = "Voice Input"
-                textSize = 18f
-                setTextColor(Color.parseColor("#e0e0e0")) // Light gray
-                typeface = android.graphics.Typeface.DEFAULT_BOLD
-                layoutParams = LinearLayout.LayoutParams(
-                    0,
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                    1f
-                )
-            }
-
-            val manualNoteButton = TextView(this@MainActivity).apply {
-                text = "✍️"
-                textSize = 22f
-                setPadding(dpToPx(8), dpToPx(8), dpToPx(8), dpToPx(8))
-                setOnClickListener { showManualNoteDialog() }
-            }
-
-            val exportButton = TextView(this@MainActivity).apply {
-                text = "📤"
-                textSize = 22f
-                setPadding(dpToPx(8), dpToPx(8), dpToPx(8), dpToPx(8))
-                setOnClickListener { exportNotes() }
-            }
-
-            val settingsButton = TextView(this@MainActivity).apply {
-                text = "⚙️"
-                textSize = 22f
-                setPadding(dpToPx(8), dpToPx(8), dpToPx(8), dpToPx(8))
-                setOnClickListener {
-                    startActivity(Intent(this@MainActivity, SettingsActivity::class.java))
+            val iconRow = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                layoutParams = FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply {
+                    marginStart = dpToPx(16)
+                    marginEnd = dpToPx(16)
                 }
             }
 
-            addView(title)
-            addView(manualNoteButton)
-            addView(exportButton)
-            addView(settingsButton)
+            val title = TextView(this@MainActivity).apply {
+                text = "Voice Input"
+                textSize = 18f
+                setTextColor(Color.parseColor("#e0e0e0"))
+                typeface = android.graphics.Typeface.DEFAULT_BOLD
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            }
+
+            favoritesToggle = TextView(this@MainActivity).apply {
+                text = "☆"
+                textSize = 20f
+                setPadding(dpToPx(8), dpToPx(8), dpToPx(8), dpToPx(8))
+                setOnClickListener {
+                    showFavoritesOnly = !showFavoritesOnly
+                    updateFilterUI()
+                    applyFilter()
+                }
+            }
+
+            val manualNoteButton = createTopIcon("✍️") { showManualNoteDialog() }
+            val exportButton = createTopIcon("📤") { exportNotes() }
+            val settingsButton = createTopIcon("⚙️") {
+                startActivity(Intent(this@MainActivity, SettingsActivity::class.java))
+            }
+
+            iconRow.addView(title)
+            iconRow.addView(favoritesToggle)
+            iconRow.addView(manualNoteButton)
+            iconRow.addView(exportButton)
+            iconRow.addView(settingsButton)
+
+            addView(iconRow)
+        }
+    }
+
+    private fun createTopIcon(symbol: String, action: () -> Unit): TextView {
+        return TextView(this).apply {
+            text = symbol
+            textSize = 22f
+            setPadding(dpToPx(8), dpToPx(8), dpToPx(8), dpToPx(8))
+            setOnClickListener { action() }
         }
     }
 
@@ -182,20 +190,26 @@ class MainActivity : AppCompatActivity() {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 dpToPx(56)
             ).apply {
-                topMargin = dpToPx(56)
+                topMargin = dpToPx(72)
                 marginStart = dpToPx(16)
                 marginEnd = dpToPx(16)
             }
 
-            background = android.graphics.drawable.GradientDrawable().apply {
-                setColor(Color.parseColor("#1f1f35"))
-                cornerRadius = dpToPx(28).toFloat()
+            val searchContainer = LinearLayout(this@MainActivity).apply {
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 2f)
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                background = GradientDrawable().apply {
+                    setColor(Color.parseColor("#1f1f35"))
+                    cornerRadius = dpToPx(28).toFloat()
+                }
+                setPadding(dpToPx(16), 0, dpToPx(16), 0)
             }
 
             val searchIcon = TextView(this@MainActivity).apply {
                 text = "🔍"
                 textSize = 18f
-                setPadding(dpToPx(16), 0, dpToPx(8), 0)
+                setPadding(0, 0, dpToPx(8), 0)
             }
 
             searchInput = EditText(this@MainActivity).apply {
@@ -219,69 +233,35 @@ class MainActivity : AppCompatActivity() {
                 text = "✕"
                 textSize = 16f
                 alpha = 0.6f
-                setPadding(dpToPx(12), 0, dpToPx(16), 0)
-                setOnClickListener {
-                    searchInput.text?.clear()
-                }
+                setOnClickListener { searchInput.text?.clear() }
             }
 
-            addView(searchIcon)
-            addView(searchInput)
-            addView(clearButton)
-        }
-    }
-
-    private fun createFilterBar(): LinearLayout {
-        return LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            layoutParams = FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                dpToPx(48)
-            ).apply {
-                topMargin = dpToPx(56 + 64)
-                marginStart = dpToPx(16)
-                marginEnd = dpToPx(16)
-            }
-
-            val backgroundDrawable = GradientDrawable().apply {
-                setColor(Color.parseColor("#1b1b2f"))
-                cornerRadius = dpToPx(12).toFloat()
-            }
-            background = backgroundDrawable
-            setPadding(dpToPx(16), dpToPx(8), dpToPx(16), dpToPx(8))
-
-            favoritesToggle = TextView(this@MainActivity).apply {
-                text = "☆ Favorites"
-                textSize = 14f
-                setTextColor(Color.parseColor("#e0e0e0"))
-                background = GradientDrawable().apply {
-                    setColor(Color.parseColor("#2b2b45"))
-                    cornerRadius = dpToPx(16).toFloat()
-                }
-                setPadding(dpToPx(16), dpToPx(6), dpToPx(16), dpToPx(6))
-                setOnClickListener {
-                    showFavoritesOnly = !showFavoritesOnly
-                    updateFilterUI()
-                    applyFilter()
-                }
-            }
-
-            val spinnerContainer = LinearLayout(this@MainActivity).apply {
-                orientation = LinearLayout.VERTICAL
+            val sortContainer = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
                 layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
                     marginStart = dpToPx(12)
                 }
+                background = GradientDrawable().apply {
+                    setColor(Color.parseColor("#1f1f35"))
+                    cornerRadius = dpToPx(28).toFloat()
+                }
+                setPadding(dpToPx(12), 0, dpToPx(12), 0)
+            }
+
+            val sortLabel = TextView(this@MainActivity).apply {
+                text = "Sort"
+                textSize = 14f
+                setTextColor(Color.parseColor("#e0e0e0"))
+                setPadding(0, 0, dpToPx(8), 0)
             }
 
             sortSpinner = Spinner(this@MainActivity, Spinner.MODE_DROPDOWN).apply {
                 adapter = ArrayAdapter(
                     this@MainActivity,
                     android.R.layout.simple_spinner_item,
-                    listOf("Newest", "Oldest", "Longest", "Shortest", "Favorites first")
-                ).also { adapter ->
-                    adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
-                }
+                    listOf("Newest", "Oldest", "Longest", "Shortest", "Favs first")
+                ).also { it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
                 setSelection(0)
                 onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
                     override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
@@ -294,16 +274,27 @@ class MainActivity : AppCompatActivity() {
                         }
                         applyFilter()
                     }
-
                     override fun onNothingSelected(parent: AdapterView<*>?) {}
                 }
             }
 
-            spinnerContainer.addView(sortSpinner)
+            searchContainer.addView(searchIcon)
+            searchContainer.addView(searchInput)
+            searchContainer.addView(clearButton)
 
-            addView(favoritesToggle)
-            addView(spinnerContainer)
-            updateFilterUI()
+            sortContainer.addView(sortLabel)
+            sortContainer.addView(sortSpinner)
+
+            addView(searchContainer)
+            addView(sortContainer)
+        }
+    }
+
+    private fun createFilterBar(): LinearLayout {
+        // Filter content already merged into search bar row; keep placeholder for layout parity
+        return LinearLayout(this).apply {
+            layoutParams = FrameLayout.LayoutParams(0, 0)
+            visibility = View.GONE
         }
     }
 
@@ -393,7 +384,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun loadNotes() {
-        allNotes = repository.getAllNotes()
+        allNotes = repository.getAllNotes().map { ensureDefaults(it) }
         applyFilter()
     }
 
@@ -405,7 +396,7 @@ class MainActivity : AppCompatActivity() {
         } else {
             allNotes.filter {
                 it.text.contains(query, ignoreCase = true) ||
-                    it.tags.any { tag -> tag.contains(query, ignoreCase = true) }
+                    it.tags.orEmpty().any { tag -> tag.contains(query, ignoreCase = true) }
             }
         }
 
@@ -420,7 +411,10 @@ class MainActivity : AppCompatActivity() {
             SortOption.OLDEST -> favoriteFiltered.sortedBy { it.createdAt }
             SortOption.LENGTH_DESC -> favoriteFiltered.sortedByDescending { it.charCount }
             SortOption.LENGTH_ASC -> favoriteFiltered.sortedBy { it.charCount }
-            SortOption.FAVORITES_FIRST -> favoriteFiltered.sortedWith(compareByDescending<Note> { it.isFavorite }.thenByDescending { it.createdAt })
+            SortOption.FAVORITES_FIRST -> favoriteFiltered.sortedWith(
+                compareByDescending<Note> { it.isFavorite }
+                    .thenByDescending { it.createdAt }
+            )
         }
 
         if (sorted.isEmpty()) {
@@ -546,7 +540,7 @@ class MainActivity : AppCompatActivity() {
             setHintTextColor(Color.parseColor("#777799"))
             setTextColor(Color.parseColor("#e0e0e0"))
             setPadding(dpToPx(16), dpToPx(12), dpToPx(16), dpToPx(12))
-            setText(note.tags.joinToString(", "))
+            setText(note.tags.orEmpty().joinToString(", "))
             background = GradientDrawable().apply {
                 setColor(Color.parseColor("#1f1f35"))
                 cornerRadius = dpToPx(8).toFloat()
@@ -576,9 +570,10 @@ class MainActivity : AppCompatActivity() {
             val header = headerFormat.format(Date(note.createdAt))
             buildString {
                 append(header)
-                if (note.tags.isNotEmpty()) {
+                val tags = note.tags.orEmpty()
+                if (tags.isNotEmpty()) {
                     append(" | Tags: ")
-                    append(note.tags.joinToString(", "))
+                    append(tags.joinToString(", "))
                 }
                 if (note.isFavorite) {
                     append(" | ★ Favorite")
@@ -599,7 +594,7 @@ class MainActivity : AppCompatActivity() {
                 note.source,
                 note.durationSec?.toString() ?: "",
                 if (note.isFavorite) "true" else "false",
-                note.tags.joinToString(";"),
+                note.tags.orEmpty().joinToString(";"),
                 note.text
             )
         }
@@ -645,13 +640,17 @@ class MainActivity : AppCompatActivity() {
         val updated = note.copy(text = trimmed, charCount = trimmed.length)
         repository.updateNote(updated)
         repository.getNoteById(updated.id)?.let {
-            adapter.updateNote(it)
+            adapter.updateNote(ensureDefaults(it))
         }
         Toast.makeText(this, "Note updated", Toast.LENGTH_SHORT).show()
     }
 
     private fun dpToPx(dp: Int): Int {
         return (dp * resources.displayMetrics.density).toInt()
+    }
+
+    private fun ensureDefaults(note: Note): Note {
+        return note.copy(tags = note.tags ?: emptyList())
     }
 }
 
@@ -782,8 +781,9 @@ class NotesAdapter(
             val metaBits = mutableListOf<String>()
             metaBits.add("${note.charCount} chars")
             note.durationSec?.let { metaBits.add("$it sec") }
-            if (note.tags.isNotEmpty()) {
-                metaBits.add("Tags: ${note.tags.joinToString(", ")}")
+            val tagsText = note.tags.orEmpty()
+            if (tagsText.isNotEmpty()) {
+                metaBits.add("Tags: ${tagsText.joinToString(", ")}")
             }
             if (note.isFavorite) {
                 metaBits.add("★ Favorite")
