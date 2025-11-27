@@ -186,6 +186,9 @@ See `CURRENT_STATUS_2025_10_26.md` and `SETTINGS_IMPLEMENTATION_COMPLETE.md` for
 - Inline editing directly in expanded cards (auto-saves on Done or focus loss)
 - Share notes via Android share sheet (copy lives inside the share UI)
 - Delete notes with confirmation dialog
+- Search bar for instant filtering
+- Manual text note creation dialog (saves as source="manual")
+- Export all notes to a TXT file via share sheet
 - Empty state with helpful instructions
 - FAB: GREEN circle with mic icon (matches IME ready state)
 - Settings button in top bar
@@ -230,9 +233,10 @@ See `CURRENT_STATUS_2025_10_26.md` and `SETTINGS_IMPLEMENTATION_COMPLETE.md` for
 - ✅ Pulsing mic animation during processing state (mirrors IME behavior)
 
 **MainActivity - Future Enhancements:**
-- Search/filter notes (see FRONTEND_SPECS_SIMPLIFIED.md v1.1)
-- Manual note creation
 - Export to file
+- Advanced filtering/sorting (duration, source, favorites)
+- Tagging, categories, bulk selection
+- Rich export formats (CSV) & integrations
 
 ### Simplified MVP Status (Per FRONTEND_SPECS_SIMPLIFIED.md)
 
@@ -268,11 +272,9 @@ See `CURRENT_STATUS_2025_10_26.md` and `SETTINGS_IMPLEMENTATION_COMPLETE.md` for
 - **Benefit:** Better accuracy OR faster speed
 
 **Option 3: Enhance MainActivity** 📱
-- Add search functionality
-- Manual note creation (text input)
-- Export (CSV, TXT)
-- Sort/filter options
-- **Estimated:** 2-3 days
+- Remaining ideas: advanced search filters, manual tagging, CSV export, bulk actions
+- Polish note management (pinning, favorites, multi-select)
+- **Estimated:** 2-3 days for next batch
 - **Benefit:** More powerful note management
 
 **Option 4: Advanced Post-Processing** 🛠️

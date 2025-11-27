@@ -2,19 +2,25 @@ package com.voiceinput
 
 import android.content.Intent
 import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
+import android.text.Editable
+import android.text.TextWatcher
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.view.inputmethod.InputMethodManager
 import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.FileProvider
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import com.voiceinput.BuildConfig
 import com.voiceinput.data.Note
 import com.voiceinput.data.NotesRepository
 import java.text.SimpleDateFormat
 import java.util.*
+import java.io.File
 
 /**
  * Main activity showing history of all voice notes
@@ -30,7 +36,12 @@ class MainActivity : AppCompatActivity() {
     private lateinit var repository: NotesRepository
     private lateinit var recyclerView: RecyclerView
     private lateinit var emptyView: LinearLayout
+    private lateinit var emptyMessage: TextView
+    private lateinit var emptyHint: TextView
+    private lateinit var searchInput: EditText
     private lateinit var adapter: NotesAdapter
+    private var allNotes: List<Note> = emptyList()
+    private var currentQuery: String = ""
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -46,6 +57,9 @@ class MainActivity : AppCompatActivity() {
         // Top bar
         val topBar = createTopBar()
 
+        // Search bar
+        val searchBar = createSearchBar()
+
         // RecyclerView for notes
         recyclerView = RecyclerView(this).apply {
             layoutManager = LinearLayoutManager(this@MainActivity)
@@ -53,9 +67,8 @@ class MainActivity : AppCompatActivity() {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT
             ).apply {
-                topMargin = dpToPx(56) // Below top bar
+                topMargin = dpToPx(56 + 64) // Top bar + search bar
             }
-            // No dividers - cards have spacing
             setPadding(dpToPx(16), dpToPx(8), dpToPx(16), dpToPx(88))
             clipToPadding = false
         }
@@ -69,6 +82,7 @@ class MainActivity : AppCompatActivity() {
         container.addView(recyclerView)
         container.addView(emptyView)
         container.addView(topBar)
+        container.addView(searchBar)
         container.addView(fab)
 
         setContentView(container)
@@ -114,18 +128,90 @@ class MainActivity : AppCompatActivity() {
                 )
             }
 
-            // Settings button
+            val manualNoteButton = TextView(this@MainActivity).apply {
+                text = "✍️"
+                textSize = 22f
+                setPadding(dpToPx(8), dpToPx(8), dpToPx(8), dpToPx(8))
+                setOnClickListener { showManualNoteDialog() }
+            }
+
+            val exportButton = TextView(this@MainActivity).apply {
+                text = "📤"
+                textSize = 22f
+                setPadding(dpToPx(8), dpToPx(8), dpToPx(8), dpToPx(8))
+                setOnClickListener { exportNotes() }
+            }
+
             val settingsButton = TextView(this@MainActivity).apply {
                 text = "⚙️"
-                textSize = 24f
-                setPadding(dpToPx(12), dpToPx(8), dpToPx(12), dpToPx(8))
+                textSize = 22f
+                setPadding(dpToPx(8), dpToPx(8), dpToPx(8), dpToPx(8))
                 setOnClickListener {
                     startActivity(Intent(this@MainActivity, SettingsActivity::class.java))
                 }
             }
 
             addView(title)
+            addView(manualNoteButton)
+            addView(exportButton)
             addView(settingsButton)
+        }
+    }
+
+    private fun createSearchBar(): LinearLayout {
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dpToPx(56)
+            ).apply {
+                topMargin = dpToPx(56)
+                marginStart = dpToPx(16)
+                marginEnd = dpToPx(16)
+            }
+
+            background = android.graphics.drawable.GradientDrawable().apply {
+                setColor(Color.parseColor("#1f1f35"))
+                cornerRadius = dpToPx(28).toFloat()
+            }
+
+            val searchIcon = TextView(this@MainActivity).apply {
+                text = "🔍"
+                textSize = 18f
+                setPadding(dpToPx(16), 0, dpToPx(8), 0)
+            }
+
+            searchInput = EditText(this@MainActivity).apply {
+                hint = "Search notes"
+                setHintTextColor(Color.parseColor("#777799"))
+                setTextColor(Color.parseColor("#e0e0e0"))
+                background = null
+                maxLines = 1
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                addTextChangedListener(object : TextWatcher {
+                    override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+                    override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+                    override fun afterTextChanged(s: Editable?) {
+                        currentQuery = s?.toString() ?: ""
+                        applyFilter()
+                    }
+                })
+            }
+
+            val clearButton = TextView(this@MainActivity).apply {
+                text = "✕"
+                textSize = 16f
+                alpha = 0.6f
+                setPadding(dpToPx(12), 0, dpToPx(16), 0)
+                setOnClickListener {
+                    searchInput.text?.clear()
+                }
+            }
+
+            addView(searchIcon)
+            addView(searchInput)
+            addView(clearButton)
         }
     }
 
@@ -138,7 +224,7 @@ class MainActivity : AppCompatActivity() {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT
             ).apply {
-                topMargin = dpToPx(56) // Below top bar
+                topMargin = dpToPx(56 + 64)
             }
 
             val icon = TextView(this@MainActivity).apply {
@@ -156,25 +242,25 @@ class MainActivity : AppCompatActivity() {
                 setPadding(0, dpToPx(24), 0, dpToPx(8))
             }
 
-            val message = TextView(this@MainActivity).apply {
+            emptyMessage = TextView(this@MainActivity).apply {
                 text = "No voice notes yet"
                 textSize = 16f
-                setTextColor(Color.parseColor("#a0a0a0")) // Dimmer gray
+                setTextColor(Color.parseColor("#a0a0a0"))
                 gravity = Gravity.CENTER
                 setPadding(0, 0, 0, dpToPx(8))
             }
 
-            val hint = TextView(this@MainActivity).apply {
+            emptyHint = TextView(this@MainActivity).apply {
                 text = "Tap + to record your first note"
                 textSize = 14f
-                setTextColor(Color.parseColor("#808080")) // Even dimmer
+                setTextColor(Color.parseColor("#808080"))
                 gravity = Gravity.CENTER
             }
 
             addView(icon)
             addView(title)
-            addView(message)
-            addView(hint)
+            addView(emptyMessage)
+            addView(emptyHint)
         }
     }
 
@@ -215,16 +301,32 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun loadNotes() {
-        val notes = repository.getAllNotes()
+        allNotes = repository.getAllNotes()
+        applyFilter()
+    }
 
-        if (notes.isEmpty()) {
+    private fun applyFilter() {
+        val filtered = if (currentQuery.isBlank()) {
+            allNotes
+        } else {
+            allNotes.filter { it.text.contains(currentQuery, ignoreCase = true) }
+        }
+
+        if (filtered.isEmpty()) {
+            if (allNotes.isEmpty() && currentQuery.isBlank()) {
+                updateEmptyState("No voice notes yet", "Tap + to record your first note")
+            } else if (allNotes.isNotEmpty() && currentQuery.isNotBlank()) {
+                updateEmptyState("No matches", "Try a different search")
+            } else {
+                updateEmptyState("No voice notes yet", "Tap + to record your first note")
+            }
             recyclerView.visibility = View.GONE
             emptyView.visibility = View.VISIBLE
             adapter.submitNotes(emptyList())
         } else {
             recyclerView.visibility = View.VISIBLE
             emptyView.visibility = View.GONE
-            adapter.submitNotes(notes)
+            adapter.submitNotes(filtered)
         }
     }
 
@@ -249,6 +351,72 @@ class MainActivity : AppCompatActivity() {
             putExtra(Intent.EXTRA_TEXT, text)
         }
         startActivity(Intent.createChooser(shareIntent, "Share note"))
+    }
+
+    private fun showManualNoteDialog() {
+        val input = EditText(this).apply {
+            hint = "Type your note"
+            setHintTextColor(Color.parseColor("#777799"))
+            setTextColor(Color.parseColor("#e0e0e0"))
+            setPadding(dpToPx(16), dpToPx(12), dpToPx(16), dpToPx(12))
+            minLines = 3
+            gravity = Gravity.TOP
+            background = android.graphics.drawable.GradientDrawable().apply {
+                setColor(Color.parseColor("#1f1f35"))
+                cornerRadius = dpToPx(8).toFloat()
+            }
+        }
+
+        android.app.AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog)
+            .setTitle("New text note")
+            .setView(input)
+            .setPositiveButton("Save") { _, _ ->
+                val text = input.text?.toString()?.trim() ?: ""
+                if (text.isEmpty()) {
+                    Toast.makeText(this, "Note cannot be empty", Toast.LENGTH_SHORT).show()
+                } else {
+                    val note = Note(text = text, source = "manual")
+                    repository.saveNote(note)
+                    loadNotes()
+                    Toast.makeText(this, "Note added", Toast.LENGTH_SHORT).show()
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun exportNotes() {
+        if (allNotes.isEmpty()) {
+            Toast.makeText(this, "No notes to export", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        try {
+            val exportText = buildExportText(allNotes)
+            val timestamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.getDefault()).format(Date())
+            val fileName = "voice-notes-$timestamp.txt"
+            val file = File(cacheDir, fileName)
+            file.writeText(exportText)
+
+            val uri = FileProvider.getUriForFile(this, "${BuildConfig.APPLICATION_ID}.fileprovider", file)
+            val intent = Intent(Intent.ACTION_SEND).apply {
+                type = "text/plain"
+                putExtra(Intent.EXTRA_SUBJECT, "Voice notes export")
+                putExtra(Intent.EXTRA_STREAM, uri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            startActivity(Intent.createChooser(intent, "Export notes"))
+        } catch (e: Exception) {
+            Toast.makeText(this, "Failed to export notes", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun buildExportText(notes: List<Note>): String {
+        val headerFormat = SimpleDateFormat("MMM dd, yyyy • HH:mm", Locale.getDefault())
+        return notes.joinToString(separator = "\n\n") { note ->
+            val header = headerFormat.format(Date(note.createdAt))
+            "$header\n${note.text}"
+        }
     }
 
     private fun handleNoteEdit(note: Note, newText: String) {
@@ -567,6 +735,11 @@ class NotesAdapter(
     private fun hideKeyboard(view: View) {
         val imm = view.context.getSystemService(InputMethodManager::class.java)
         imm?.hideSoftInputFromWindow(view.windowToken, 0)
+    }
+
+    private fun updateEmptyState(message: String, hint: String) {
+        emptyMessage.text = message
+        emptyHint.text = hint
     }
 
     private fun dpToPx(dp: Int): Int {
