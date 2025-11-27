@@ -36,6 +36,7 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
 
         repository = NotesRepository(this)
+        supportActionBar?.hide()
 
         // Main container with cosmos gradient
         val container = FrameLayout(this).apply {
@@ -53,10 +54,9 @@ class MainActivity : AppCompatActivity() {
                 ViewGroup.LayoutParams.MATCH_PARENT
             ).apply {
                 topMargin = dpToPx(56) // Below top bar
-                bottomMargin = dpToPx(80) // Above FAB
             }
             // No dividers - cards have spacing
-            setPadding(dpToPx(16), dpToPx(8), dpToPx(16), dpToPx(8))
+            setPadding(dpToPx(16), dpToPx(8), dpToPx(16), dpToPx(88))
             clipToPadding = false
         }
 
@@ -75,7 +75,7 @@ class MainActivity : AppCompatActivity() {
 
         adapter = NotesAdapter(
             onDelete = { note -> confirmDelete(note) },
-            onShare = { note -> shareNote(note) },
+            onShare = { text -> shareNote(text) },
             onEdit = { note, newText -> handleNoteEdit(note, newText) }
         )
         recyclerView.adapter = adapter
@@ -242,11 +242,11 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
-    private fun shareNote(note: Note) {
+    private fun shareNote(text: String) {
         val shareIntent = Intent(Intent.ACTION_SEND).apply {
             type = "text/plain"
             putExtra(Intent.EXTRA_SUBJECT, "Voice note")
-            putExtra(Intent.EXTRA_TEXT, note.text)
+            putExtra(Intent.EXTRA_TEXT, text)
         }
         startActivity(Intent.createChooser(shareIntent, "Share note"))
     }
@@ -287,7 +287,7 @@ class MainActivity : AppCompatActivity() {
  */
 class NotesAdapter(
     private val onDelete: (Note) -> Unit,
-    private val onShare: (Note) -> Unit,
+    private val onShare: (String) -> Unit,
     private val onEdit: (Note, String) -> Unit
 ) : RecyclerView.Adapter<NotesAdapter.NoteViewHolder>() {
 
@@ -398,7 +398,6 @@ class NotesAdapter(
         if (isExpanded) {
             holder.previewText.visibility = View.GONE
             holder.fullText.visibility = View.VISIBLE
-            holder.fullText.setSelection(holder.fullText.text?.length ?: 0)
             holder.metadataText.visibility = View.VISIBLE
             holder.metadataText.text = "${note.charCount} chars" +
                 if (note.durationSec != null) " • ${note.durationSec} sec" else ""
@@ -409,31 +408,47 @@ class NotesAdapter(
             holder.fullText.isEnabled = true
             if (!isEditing) {
                 holder.fullText.clearFocus()
+            } else {
+                holder.fullText.post {
+                    if (editingNoteIds.contains(note.id)) {
+                        if (!holder.fullText.hasFocus()) {
+                            holder.fullText.requestFocus()
+                        }
+                        holder.fullText.setSelection(holder.fullText.text?.length ?: 0)
+                        showKeyboard(holder.fullText)
+                    }
+                }
             }
 
             holder.actionsRow.removeAllViews()
-            val editLabel = if (isEditing) "✅ Done" else "✏️ Edit"
-            holder.actionsRow.addView(createActionButton(holder.view.context, editLabel) {
-                if (isEditing) {
-                    completeInlineEdit(holder, note)
+            val editButton = createActionButton(holder.view.context, if (isEditing) "✅ Done" else "✏️ Edit") {}
+            holder.actionsRow.addView(editButton)
+            holder.fullText.tag = editButton
+            editButton.setOnClickListener {
+                if (editingNoteIds.contains(note.id)) {
+                    completeInlineEdit(holder, note, editButton)
                 } else {
-                    beginInlineEdit(holder, note)
+                    beginInlineEdit(holder, note, editButton)
                 }
-            })
-            holder.actionsRow.addView(createActionButton(holder.view.context, "📤 Share") {
-                onShare(note)
-            })
-            holder.actionsRow.addView(createActionButton(holder.view.context, "📋 Copy") {
-                copyToClipboard(holder.view.context, note.text)
-            })
-            holder.actionsRow.addView(createActionButton(holder.view.context, "🗑️ Delete") {
+            }
+            val shareButton = createActionButton(holder.view.context, "📤 Share") {
+                val currentText = holder.fullText.text?.toString() ?: note.text
+                if (editingNoteIds.contains(note.id)) {
+                    completeInlineEdit(holder, note, holder.fullText.tag as? TextView)
+                }
+                onShare(currentText)
+            }
+            holder.actionsRow.addView(shareButton)
+            val deleteButton = createActionButton(holder.view.context, "🗑️ Delete") {
                 onDelete(note)
-            })
+            }
+            holder.actionsRow.addView(deleteButton)
         } else {
             holder.previewText.visibility = View.VISIBLE
             holder.fullText.visibility = View.GONE
             holder.metadataText.visibility = View.GONE
             holder.actionsRow.visibility = View.GONE
+            holder.fullText.tag = null
 
             val preview = if (note.text.length > 60) {
                 note.text.substring(0, 60) + "..."
@@ -446,8 +461,9 @@ class NotesAdapter(
         holder.timestampText.text = dateFormat.format(Date(note.createdAt))
 
         holder.fullText.onFocusChangeListener = View.OnFocusChangeListener { v, hasFocus ->
+            val button = v.tag as? TextView
             if (!hasFocus && editingNoteIds.contains(note.id)) {
-                completeInlineEdit(holder, note)
+                completeInlineEdit(holder, note, button)
             }
         }
 
@@ -455,7 +471,12 @@ class NotesAdapter(
         holder.view.setOnClickListener {
             if (expandedNoteIds.contains(note.id)) {
                 expandedNoteIds.remove(note.id)
-                editingNoteIds.remove(note.id)
+                val button = holder.fullText.tag as? TextView
+                if (editingNoteIds.contains(note.id)) {
+                    completeInlineEdit(holder, note, button)
+                } else {
+                    holder.fullText.clearFocus()
+                }
             } else {
                 expandedNoteIds.add(note.id)
             }
@@ -512,34 +533,30 @@ class NotesAdapter(
         }
     }
 
-    private fun beginInlineEdit(holder: NoteViewHolder, note: Note) {
-        editingNoteIds.add(note.id)
-        holder.fullText.isFocusable = true
-        holder.fullText.isFocusableInTouchMode = true
-        holder.fullText.isCursorVisible = true
-        holder.fullText.requestFocus()
-        holder.fullText.setSelection(holder.fullText.text?.length ?: 0)
-        showKeyboard(holder.fullText)
-        holder.adapterPosition.takeIf { it != RecyclerView.NO_POSITION }?.let {
-            notifyItemChanged(it)
+    private fun beginInlineEdit(holder: NoteViewHolder, note: Note, editButton: TextView) {
+        if (!editingNoteIds.add(note.id)) return
+        editButton.text = "✅ Done"
+        holder.fullText.apply {
+            isFocusable = true
+            isFocusableInTouchMode = true
+            isCursorVisible = true
+            requestFocus()
+            post {
+                setSelection(text?.length ?: 0)
+                showKeyboard(this)
+            }
         }
     }
 
-    private fun completeInlineEdit(holder: NoteViewHolder, note: Note) {
+    private fun completeInlineEdit(holder: NoteViewHolder, note: Note, editButton: TextView?) {
         if (!editingNoteIds.contains(note.id)) return
         editingNoteIds.remove(note.id)
+        editButton?.text = "✏️ Edit"
         holder.fullText.isCursorVisible = false
         hideKeyboard(holder.fullText)
         holder.fullText.clearFocus()
         val updatedText = holder.fullText.text?.toString() ?: ""
         onEdit(note, updatedText)
-    }
-
-    private fun copyToClipboard(context: android.content.Context, text: String) {
-        val clipboard = context.getSystemService(android.content.ClipboardManager::class.java)
-        val clip = android.content.ClipData.newPlainText("Note", text)
-        clipboard.setPrimaryClip(clip)
-        Toast.makeText(context, "Copied to clipboard", Toast.LENGTH_SHORT).show()
     }
 
     private fun showKeyboard(view: View) {
