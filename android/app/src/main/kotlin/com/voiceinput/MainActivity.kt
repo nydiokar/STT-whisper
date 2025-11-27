@@ -12,6 +12,7 @@ import android.view.ViewGroup
 import android.view.inputmethod.InputMethodManager
 import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
+import androidx.appcompat.widget.PopupMenu
 import androidx.core.content.FileProvider
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
@@ -808,38 +809,11 @@ class NotesAdapter(
             }
 
             holder.actionsRow.removeAllViews()
-            val editButton = createActionButton(holder.view.context, if (isEditing) "✅ Done" else "✏️ Edit") {}
-            holder.actionsRow.addView(editButton)
-            holder.fullText.tag = editButton
-            editButton.setOnClickListener {
-                if (editingNoteIds.contains(note.id)) {
-                    completeInlineEdit(holder, note, editButton)
-                } else {
-                    beginInlineEdit(holder, note, editButton)
-                }
+            val actionsButton = createActionButton(holder.view.context, "⋮ Actions") {}
+            holder.actionsRow.addView(actionsButton)
+            actionsButton.setOnClickListener {
+                showActionsMenu(actionsButton, note, holder)
             }
-            val favoriteButton = createActionButton(holder.view.context, if (note.isFavorite) "★ Unfavorite" else "☆ Favorite") {
-                onFavoriteToggle(note)
-            }
-            holder.actionsRow.addView(favoriteButton)
-
-            val tagButton = createActionButton(holder.view.context, "🏷 Tags") {
-                onEditTags(note)
-            }
-            holder.actionsRow.addView(tagButton)
-
-            val shareButton = createActionButton(holder.view.context, "📤 Share") {
-                val currentText = holder.fullText.text?.toString() ?: note.text
-                if (editingNoteIds.contains(note.id)) {
-                    completeInlineEdit(holder, note, holder.fullText.tag as? TextView)
-                }
-                onShare(currentText)
-            }
-            holder.actionsRow.addView(shareButton)
-            val deleteButton = createActionButton(holder.view.context, "🗑️ Delete") {
-                onDelete(note)
-            }
-            holder.actionsRow.addView(deleteButton)
         } else {
             holder.previewText.visibility = View.VISIBLE
             holder.fullText.visibility = View.GONE
@@ -857,10 +831,9 @@ class NotesAdapter(
 
         holder.timestampText.text = dateFormat.format(Date(note.createdAt))
 
-        holder.fullText.onFocusChangeListener = View.OnFocusChangeListener { v, hasFocus ->
-            val button = v.tag as? TextView
+        holder.fullText.onFocusChangeListener = View.OnFocusChangeListener { _, hasFocus ->
             if (!hasFocus && editingNoteIds.contains(note.id)) {
-                completeInlineEdit(holder, note, button)
+                completeInlineEdit(holder, note)
             }
         }
 
@@ -868,9 +841,8 @@ class NotesAdapter(
         holder.view.setOnClickListener {
             if (expandedNoteIds.contains(note.id)) {
                 expandedNoteIds.remove(note.id)
-                val button = holder.fullText.tag as? TextView
                 if (editingNoteIds.contains(note.id)) {
-                    completeInlineEdit(holder, note, button)
+                    completeInlineEdit(holder, note)
                 } else {
                     holder.fullText.clearFocus()
                 }
@@ -930,9 +902,48 @@ class NotesAdapter(
         }
     }
 
-    private fun beginInlineEdit(holder: NoteViewHolder, note: Note, editButton: TextView) {
+    private fun showActionsMenu(anchor: View, note: Note, holder: NoteViewHolder) {
+        val popup = PopupMenu(anchor.context, anchor)
+        val editing = editingNoteIds.contains(note.id)
+
+        popup.menu.add(if (editing) "Save changes" else "Edit note").setOnMenuItemClickListener {
+            if (editing) {
+                completeInlineEdit(holder, note)
+            } else {
+                beginInlineEdit(holder, note)
+            }
+            true
+        }
+
+        popup.menu.add(if (note.isFavorite) "Remove favorite" else "Add to favorites").setOnMenuItemClickListener {
+            onFavoriteToggle(note)
+            true
+        }
+
+        popup.menu.add("Edit tags").setOnMenuItemClickListener {
+            onEditTags(note)
+            true
+        }
+
+        popup.menu.add("Share").setOnMenuItemClickListener {
+            val currentText = holder.fullText.text?.toString() ?: note.text
+            if (editingNoteIds.contains(note.id)) {
+                completeInlineEdit(holder, note)
+            }
+            onShare(currentText)
+            true
+        }
+
+        popup.menu.add("Delete").setOnMenuItemClickListener {
+            onDelete(note)
+            true
+        }
+
+        popup.show()
+    }
+
+    private fun beginInlineEdit(holder: NoteViewHolder, note: Note) {
         if (!editingNoteIds.add(note.id)) return
-        editButton.text = "✅ Done"
         holder.fullText.apply {
             isFocusable = true
             isFocusableInTouchMode = true
@@ -945,10 +956,9 @@ class NotesAdapter(
         }
     }
 
-    private fun completeInlineEdit(holder: NoteViewHolder, note: Note, editButton: TextView?) {
+    private fun completeInlineEdit(holder: NoteViewHolder, note: Note) {
         if (!editingNoteIds.contains(note.id)) return
         editingNoteIds.remove(note.id)
-        editButton?.text = "✏️ Edit"
         holder.fullText.isCursorVisible = false
         hideKeyboard(holder.fullText)
         holder.fullText.clearFocus()
