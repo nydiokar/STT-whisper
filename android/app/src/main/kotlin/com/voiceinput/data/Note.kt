@@ -12,5 +12,7 @@ data class Note(
     val updatedAt: Long = System.currentTimeMillis(),
     val source: String = "stt", // "stt" or "manual"
     val charCount: Int = text.length,
-    val durationSec: Int? = null // Only for STT notes
+    val durationSec: Int? = null, // Only for STT notes
+    val isFavorite: Boolean = false,
+    val tags: List<String> = emptyList()
 )

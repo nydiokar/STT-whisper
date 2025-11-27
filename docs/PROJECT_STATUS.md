@@ -188,7 +188,9 @@ See `CURRENT_STATUS_2025_10_26.md` and `SETTINGS_IMPLEMENTATION_COMPLETE.md` for
 - Delete notes with confirmation dialog
 - Search bar for instant filtering
 - Manual text note creation dialog (saves as source="manual")
-- Export all notes to a TXT file via share sheet
+- Favorites toggle + advanced sort (newest/oldest/length + favorites-first)
+- Tag notes inline (comma-separated) and filter/search by tags
+- Export all notes via TXT or CSV share sheet
 - Empty state with helpful instructions
 - FAB: GREEN circle with mic icon (matches IME ready state)
 - Settings button in top bar
@@ -233,10 +235,11 @@ See `CURRENT_STATUS_2025_10_26.md` and `SETTINGS_IMPLEMENTATION_COMPLETE.md` for
 - ✅ Pulsing mic animation during processing state (mirrors IME behavior)
 
 **MainActivity - Future Enhancements:**
-- Export to file
-- Advanced filtering/sorting (duration, source, favorites)
-- Tagging, categories, bulk selection
-- Rich export formats (CSV) & integrations
+- Bulk selection + multi-delete
+- Pinning / manual ordering
+- Advanced tagging UI (chips, colors), tag filters panel
+- Search within tags only / saved smart filters
+- Rich exports (PDF), cloud sync integrations
 
 ### Simplified MVP Status (Per FRONTEND_SPECS_SIMPLIFIED.md)
 
@@ -272,8 +275,8 @@ See `CURRENT_STATUS_2025_10_26.md` and `SETTINGS_IMPLEMENTATION_COMPLETE.md` for
 - **Benefit:** Better accuracy OR faster speed
 
 **Option 3: Enhance MainActivity** 📱
-- Remaining ideas: advanced search filters, manual tagging, CSV export, bulk actions
-- Polish note management (pinning, favorites, multi-select)
+- Delivered: search bar, manual notes, inline edit/share, favorites toggle, tagging, TXT/CSV export
+- Next: bulk select, advanced tagging UI, pinning, integrate share-to-app shortcuts
 - **Estimated:** 2-3 days for next batch
 - **Benefit:** More powerful note management
 

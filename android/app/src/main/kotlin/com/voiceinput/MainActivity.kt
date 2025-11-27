@@ -38,9 +38,22 @@ class MainActivity : AppCompatActivity() {
     private lateinit var emptyMessage: TextView
     private lateinit var emptyHint: TextView
     private lateinit var searchInput: EditText
+    private lateinit var filterBar: LinearLayout
+    private lateinit var favoritesToggle: TextView
+    private lateinit var sortSpinner: Spinner
     private lateinit var adapter: NotesAdapter
     private var allNotes: List<Note> = emptyList()
     private var currentQuery: String = ""
+    private var showFavoritesOnly: Boolean = false
+    private var sortOption: SortOption = SortOption.NEWEST
+
+    private enum class SortOption {
+        NEWEST,
+        OLDEST,
+        LENGTH_DESC,
+        LENGTH_ASC,
+        FAVORITES_FIRST
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -58,6 +71,7 @@ class MainActivity : AppCompatActivity() {
 
         // Search bar
         val searchBar = createSearchBar()
+        filterBar = createFilterBar()
 
         // RecyclerView for notes
         recyclerView = RecyclerView(this).apply {
@@ -66,7 +80,7 @@ class MainActivity : AppCompatActivity() {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT
             ).apply {
-                topMargin = dpToPx(56 + 64) // Top bar + search bar
+                topMargin = dpToPx(56 + 64 + 48) // Top bar + search + filters
             }
             setPadding(dpToPx(16), dpToPx(8), dpToPx(16), dpToPx(88))
             clipToPadding = false
@@ -82,6 +96,7 @@ class MainActivity : AppCompatActivity() {
         container.addView(emptyView)
         container.addView(topBar)
         container.addView(searchBar)
+        container.addView(filterBar)
         container.addView(fab)
 
         setContentView(container)
@@ -89,7 +104,9 @@ class MainActivity : AppCompatActivity() {
         adapter = NotesAdapter(
             onDelete = { note -> confirmDelete(note) },
             onShare = { text -> shareNote(text) },
-            onEdit = { note, newText -> handleNoteEdit(note, newText) }
+            onEdit = { note, newText -> handleNoteEdit(note, newText) },
+            onFavoriteToggle = { note -> toggleFavorite(note) },
+            onEditTags = { note -> editTags(note) }
         )
         recyclerView.adapter = adapter
 
@@ -214,6 +231,82 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun createFilterBar(): LinearLayout {
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dpToPx(48)
+            ).apply {
+                topMargin = dpToPx(56 + 64)
+                marginStart = dpToPx(16)
+                marginEnd = dpToPx(16)
+            }
+
+            val backgroundDrawable = GradientDrawable().apply {
+                setColor(Color.parseColor("#1b1b2f"))
+                cornerRadius = dpToPx(12).toFloat()
+            }
+            background = backgroundDrawable
+            setPadding(dpToPx(16), dpToPx(8), dpToPx(16), dpToPx(8))
+
+            favoritesToggle = TextView(this@MainActivity).apply {
+                text = "☆ Favorites"
+                textSize = 14f
+                setTextColor(Color.parseColor("#e0e0e0"))
+                background = GradientDrawable().apply {
+                    setColor(Color.parseColor("#2b2b45"))
+                    cornerRadius = dpToPx(16).toFloat()
+                }
+                setPadding(dpToPx(16), dpToPx(6), dpToPx(16), dpToPx(6))
+                setOnClickListener {
+                    showFavoritesOnly = !showFavoritesOnly
+                    updateFilterUI()
+                    applyFilter()
+                }
+            }
+
+            val spinnerContainer = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                    marginStart = dpToPx(12)
+                }
+            }
+
+            sortSpinner = Spinner(this@MainActivity, Spinner.MODE_DROPDOWN).apply {
+                adapter = ArrayAdapter(
+                    this@MainActivity,
+                    android.R.layout.simple_spinner_item,
+                    listOf("Newest", "Oldest", "Longest", "Shortest", "Favorites first")
+                ).also { adapter ->
+                    adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+                }
+                setSelection(0)
+                onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+                    override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+                        sortOption = when (position) {
+                            0 -> SortOption.NEWEST
+                            1 -> SortOption.OLDEST
+                            2 -> SortOption.LENGTH_DESC
+                            3 -> SortOption.LENGTH_ASC
+                            else -> SortOption.FAVORITES_FIRST
+                        }
+                        applyFilter()
+                    }
+
+                    override fun onNothingSelected(parent: AdapterView<*>?) {}
+                }
+            }
+
+            spinnerContainer.addView(sortSpinner)
+
+            addView(favoritesToggle)
+            addView(spinnerContainer)
+            updateFilterUI()
+        }
+    }
+
     private fun createEmptyView(): LinearLayout {
         return LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -223,7 +316,7 @@ class MainActivity : AppCompatActivity() {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT
             ).apply {
-                topMargin = dpToPx(56 + 64)
+                topMargin = dpToPx(56 + 64 + 48)
             }
 
             val icon = TextView(this@MainActivity).apply {
@@ -305,17 +398,36 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun applyFilter() {
-        val filtered = if (currentQuery.isBlank()) {
+        updateFilterUI()
+        val query = currentQuery.trim()
+        val filtered = if (query.isBlank()) {
             allNotes
         } else {
-            allNotes.filter { it.text.contains(currentQuery, ignoreCase = true) }
+            allNotes.filter {
+                it.text.contains(query, ignoreCase = true) ||
+                    it.tags.any { tag -> tag.contains(query, ignoreCase = true) }
+            }
         }
 
-        if (filtered.isEmpty()) {
+        val favoriteFiltered = if (showFavoritesOnly) {
+            filtered.filter { it.isFavorite }
+        } else {
+            filtered
+        }
+
+        val sorted = when (sortOption) {
+            SortOption.NEWEST -> favoriteFiltered.sortedByDescending { it.createdAt }
+            SortOption.OLDEST -> favoriteFiltered.sortedBy { it.createdAt }
+            SortOption.LENGTH_DESC -> favoriteFiltered.sortedByDescending { it.charCount }
+            SortOption.LENGTH_ASC -> favoriteFiltered.sortedBy { it.charCount }
+            SortOption.FAVORITES_FIRST -> favoriteFiltered.sortedWith(compareByDescending<Note> { it.isFavorite }.thenByDescending { it.createdAt })
+        }
+
+        if (sorted.isEmpty()) {
             if (allNotes.isEmpty() && currentQuery.isBlank()) {
                 updateEmptyState("No voice notes yet", "Tap + to record your first note")
-            } else if (allNotes.isNotEmpty() && currentQuery.isNotBlank()) {
-                updateEmptyState("No matches", "Try a different search")
+            } else if (allNotes.isNotEmpty() && (currentQuery.isNotBlank() || showFavoritesOnly)) {
+                updateEmptyState("No matches", "Try a different filter")
             } else {
                 updateEmptyState("No voice notes yet", "Tap + to record your first note")
             }
@@ -325,7 +437,20 @@ class MainActivity : AppCompatActivity() {
         } else {
             recyclerView.visibility = View.VISIBLE
             emptyView.visibility = View.GONE
-            adapter.submitNotes(filtered)
+            adapter.submitNotes(sorted)
+        }
+    }
+
+    private fun updateFilterUI() {
+        if (!::favoritesToggle.isInitialized) return
+        if (showFavoritesOnly) {
+            favoritesToggle.text = "★ Favorites"
+            favoritesToggle.setTextColor(Color.parseColor("#FFD54F"))
+            (favoritesToggle.background as? GradientDrawable)?.setColor(Color.parseColor("#3a2f1f"))
+        } else {
+            favoritesToggle.text = "☆ Favorites"
+            favoritesToggle.setTextColor(Color.parseColor("#e0e0e0"))
+            (favoritesToggle.background as? GradientDrawable)?.setColor(Color.parseColor("#2b2b45"))
         }
     }
 
@@ -395,16 +520,105 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        try {
-            val exportText = buildExportText(allNotes)
-            val timestamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.getDefault()).format(Date())
-            val fileName = "voice-notes-$timestamp.txt"
-            val file = File(cacheDir, fileName)
-            file.writeText(exportText)
+        val options = arrayOf("Text (.txt)", "Spreadsheet (.csv)")
+        android.app.AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog)
+            .setTitle("Export notes")
+            .setItems(options) { _, which ->
+                when (which) {
+                    0 -> shareExport(buildExportText(allNotes), "text/plain", "txt")
+                    1 -> shareExport(buildExportCsv(allNotes), "text/csv", "csv")
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
 
+    private fun toggleFavorite(note: Note) {
+        val updated = note.copy(isFavorite = !note.isFavorite)
+        repository.updateNote(updated)
+        loadNotes()
+        Toast.makeText(this, if (updated.isFavorite) "Added to favorites" else "Removed from favorites", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun editTags(note: Note) {
+        val input = EditText(this).apply {
+            hint = "comma,separated,tags"
+            setHintTextColor(Color.parseColor("#777799"))
+            setTextColor(Color.parseColor("#e0e0e0"))
+            setPadding(dpToPx(16), dpToPx(12), dpToPx(16), dpToPx(12))
+            setText(note.tags.joinToString(", "))
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#1f1f35"))
+                cornerRadius = dpToPx(8).toFloat()
+            }
+        }
+
+        android.app.AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog)
+            .setTitle("Edit tags")
+            .setView(input)
+            .setPositiveButton("Save") { _, _ ->
+                val raw = input.text?.toString() ?: ""
+                val tags = raw.split(",")
+                    .map { it.trim() }
+                    .filter { it.isNotEmpty() }
+                val updated = note.copy(tags = tags)
+                repository.updateNote(updated)
+                loadNotes()
+                Toast.makeText(this, "Tags updated", Toast.LENGTH_SHORT).show()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun buildExportText(notes: List<Note>): String {
+        val headerFormat = SimpleDateFormat("MMM dd, yyyy • HH:mm", Locale.getDefault())
+        return notes.joinToString(separator = "\n\n") { note ->
+            val header = headerFormat.format(Date(note.createdAt))
+            buildString {
+                append(header)
+                if (note.tags.isNotEmpty()) {
+                    append(" | Tags: ")
+                    append(note.tags.joinToString(", "))
+                }
+                if (note.isFavorite) {
+                    append(" | ★ Favorite")
+                }
+                append("\n")
+                append(note.text)
+            }
+        }
+    }
+
+    private fun buildExportCsv(notes: List<Note>): String {
+        val header = listOf("id", "created_at", "updated_at", "source", "duration_sec", "favorite", "tags", "text")
+        val rows = notes.map { note ->
+            listOf(
+                note.id,
+                note.createdAt.toString(),
+                note.updatedAt.toString(),
+                note.source,
+                note.durationSec?.toString() ?: "",
+                if (note.isFavorite) "true" else "false",
+                note.tags.joinToString(";"),
+                note.text
+            )
+        }
+        return (listOf(header) + rows).joinToString("\n") { row ->
+            row.joinToString(",") { value ->
+                val escaped = value.replace("\"", "\"\"")
+                "\"$escaped\""
+            }
+        }
+    }
+
+    private fun shareExport(content: String, mimeType: String, extension: String) {
+        try {
+            val timestamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.getDefault()).format(Date())
+            val fileName = "voice-notes-$timestamp.$extension"
+            val file = File(cacheDir, fileName).apply { writeText(content) }
             val uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
             val intent = Intent(Intent.ACTION_SEND).apply {
-                type = "text/plain"
+                type = mimeType
                 putExtra(Intent.EXTRA_SUBJECT, "Voice notes export")
                 putExtra(Intent.EXTRA_STREAM, uri)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
@@ -412,14 +626,6 @@ class MainActivity : AppCompatActivity() {
             startActivity(Intent.createChooser(intent, "Export notes"))
         } catch (e: Exception) {
             Toast.makeText(this, "Failed to export notes", Toast.LENGTH_SHORT).show()
-        }
-    }
-
-    private fun buildExportText(notes: List<Note>): String {
-        val headerFormat = SimpleDateFormat("MMM dd, yyyy • HH:mm", Locale.getDefault())
-        return notes.joinToString(separator = "\n\n") { note ->
-            val header = headerFormat.format(Date(note.createdAt))
-            "$header\n${note.text}"
         }
     }
 
@@ -460,7 +666,9 @@ class MainActivity : AppCompatActivity() {
 class NotesAdapter(
     private val onDelete: (Note) -> Unit,
     private val onShare: (String) -> Unit,
-    private val onEdit: (Note, String) -> Unit
+    private val onEdit: (Note, String) -> Unit,
+    private val onFavoriteToggle: (Note) -> Unit,
+    private val onEditTags: (Note) -> Unit
 ) : RecyclerView.Adapter<NotesAdapter.NoteViewHolder>() {
 
     private val dateFormat = SimpleDateFormat("MMM dd, yyyy • HH:mm", Locale.getDefault())
@@ -571,8 +779,16 @@ class NotesAdapter(
             holder.previewText.visibility = View.GONE
             holder.fullText.visibility = View.VISIBLE
             holder.metadataText.visibility = View.VISIBLE
-            holder.metadataText.text = "${note.charCount} chars" +
-                if (note.durationSec != null) " • ${note.durationSec} sec" else ""
+            val metaBits = mutableListOf<String>()
+            metaBits.add("${note.charCount} chars")
+            note.durationSec?.let { metaBits.add("$it sec") }
+            if (note.tags.isNotEmpty()) {
+                metaBits.add("Tags: ${note.tags.joinToString(", ")}")
+            }
+            if (note.isFavorite) {
+                metaBits.add("★ Favorite")
+            }
+            holder.metadataText.text = metaBits.joinToString(" • ")
             holder.actionsRow.visibility = View.VISIBLE
             holder.fullText.isFocusable = isEditing
             holder.fullText.isFocusableInTouchMode = isEditing
@@ -603,6 +819,16 @@ class NotesAdapter(
                     beginInlineEdit(holder, note, editButton)
                 }
             }
+            val favoriteButton = createActionButton(holder.view.context, if (note.isFavorite) "★ Unfavorite" else "☆ Favorite") {
+                onFavoriteToggle(note)
+            }
+            holder.actionsRow.addView(favoriteButton)
+
+            val tagButton = createActionButton(holder.view.context, "🏷 Tags") {
+                onEditTags(note)
+            }
+            holder.actionsRow.addView(tagButton)
+
             val shareButton = createActionButton(holder.view.context, "📤 Share") {
                 val currentText = holder.fullText.text?.toString() ?: note.text
                 if (editingNoteIds.contains(note.id)) {
