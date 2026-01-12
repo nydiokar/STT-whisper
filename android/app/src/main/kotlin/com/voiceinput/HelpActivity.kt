@@ -78,12 +78,12 @@ class HelpActivity : AppCompatActivity() {
         container.addView(createCard(
             "⏱️ Recording Limits",
             """
-            • Maximum Duration: 60 seconds
-            • Warning: Last 10 seconds (timer turns red)
-            • Optimal Length: 15-30 seconds
-            • Processing Time: ~4-6 seconds for 30s audio
+            • Maximum Duration: 7 minutes
+            • Warning: Last 30 seconds (timer turns red)
+            • Optimal Length: 30-90 seconds
+            • Processing Time: scales with length (chunked)
             
-            💡 Tip: Keep recordings under 30 seconds for the best experience.
+            💡 Tip: Long recordings are chunked automatically; shorter ones process faster.
             """.trimIndent()
         ))
 
@@ -111,7 +111,7 @@ class HelpActivity : AppCompatActivity() {
             ❌ Red Status = Error (tap to retry)
             
             Timer shows elapsed time during recording
-            Last 10 seconds show countdown warning
+            Last 30 seconds show countdown warning
             """.trimIndent()
         ))
 
@@ -149,7 +149,7 @@ class HelpActivity : AppCompatActivity() {
             → Ensure recording is at least 1 second
             
             "Max duration reached"?
-            → Record in shorter segments (< 60 seconds)
+            → Record in shorter segments if you hit the limit
             
             Text doesn't appear?
             → Text field may have closed - tap field again
@@ -176,7 +176,7 @@ class HelpActivity : AppCompatActivity() {
             "⚡ Performance Tips",
             """
             For faster transcription:
-            • Keep recordings under 30 seconds
+            • Shorter recordings process faster
             • Use newer devices with APU/NPU
             • Close background apps
             • Charge device during heavy use

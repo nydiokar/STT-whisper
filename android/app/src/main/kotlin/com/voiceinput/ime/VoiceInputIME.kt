@@ -9,11 +9,13 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.LifecycleRegistry
 import com.voiceinput.core.AudioRecorder
+import com.voiceinput.core.LongTranscription
 import com.voiceinput.core.WhisperEngine
 import com.voiceinput.core.TextProcessor
 import com.voiceinput.config.ConfigRepository
 import com.voiceinput.config.PreferencesManager
 import com.voiceinput.config.InputMode
+import com.voiceinput.config.AppConfig
 import com.voiceinput.data.Note
 import com.voiceinput.data.NotesRepository
 import com.voiceinput.SettingsActivity
@@ -47,9 +49,9 @@ class VoiceInputIME : InputMethodService(), LifecycleOwner {
 
     companion object {
         private const val TAG = "VoiceInputIME"
-        private const val MAX_RECORDING_DURATION_MS = 60_000L  // 60 seconds max (was 30s)
-        private const val MAX_BUFFER_SIZE_BYTES = 20 * 1024 * 1024  // 20 MB max (was 10MB)
-        private const val WARNING_DURATION_MS = 50_000L  // Warn at 50 seconds
+        private const val MAX_RECORDING_DURATION_MS = 7 * 60_000L  // 7 minutes max
+        private const val MAX_BUFFER_SIZE_BYTES = 32 * 1024 * 1024  // 32 MB max
+        private const val WARNING_DURATION_MS = MAX_RECORDING_DURATION_MS - 30_000L  // Warn in last 30 seconds
     }
 
     // Lifecycle management for coroutines
@@ -75,6 +77,7 @@ class VoiceInputIME : InputMethodService(), LifecycleOwner {
     private var isInitialized = false
     private var isRecording = false
     private var isTapMode = true  // Will be loaded from preferences
+    private var appConfig: AppConfig? = null
 
     // Thread-safe audio buffer with size limits
     private val audioBufferMutex = kotlinx.coroutines.sync.Mutex()
@@ -194,6 +197,7 @@ class VoiceInputIME : InputMethodService(), LifecycleOwner {
                 }
                 
                 val config = ConfigRepository(this@VoiceInputIME).load()
+                appConfig = config
                 
                 // Initialize audio recorder
                 audioRecorder = AudioRecorder(
@@ -375,7 +379,7 @@ class VoiceInputIME : InputMethodService(), LifecycleOwner {
                         val remaining = (MAX_RECORDING_DURATION_MS / 1000) - elapsed
 
                         if (elapsed >= (WARNING_DURATION_MS / 1000)) {
-                            // Show warning in last 10 seconds
+                            // Show warning in last 30 seconds
                             keyboardView?.showStatus("Recording • ${remaining}s left")
                         } else {
                             // Show elapsed time
@@ -394,8 +398,8 @@ class VoiceInputIME : InputMethodService(), LifecycleOwner {
                             val elapsed = System.currentTimeMillis() - recordingStartTime
 
                             if (elapsed > MAX_RECORDING_DURATION_MS) {
-                                Log.w(TAG, "Maximum recording duration reached (60s)")
-                                keyboardView?.showError("Max duration reached (60s)")
+                                Log.w(TAG, "Maximum recording duration reached (7m)")
+                                keyboardView?.showError("Max duration reached (7m)")
                                 stopRecording()
                                 return@collect
                             }
@@ -405,7 +409,7 @@ class VoiceInputIME : InputMethodService(), LifecycleOwner {
                                 if (isRecording) {
                                     val currentSize = audioBuffer.sumOf { it.size }
                                     if (currentSize + chunk.size > MAX_BUFFER_SIZE_BYTES) {
-                                        Log.w(TAG, "Maximum buffer size reached (10MB)")
+                                        Log.w(TAG, "Maximum buffer size reached (32MB)")
                                         stopRecording()
                                         return@collect
                                     }
@@ -469,36 +473,41 @@ class VoiceInputIME : InputMethodService(), LifecycleOwner {
                 
                 Log.i(TAG, "Transcribing ${audioData.size} bytes of audio (${audioBuffer.size} chunks)")
                 
-                // Transcribe
-                val result = whisperEngine?.transcribe(audioData)
+                val engine = whisperEngine
+                if (engine == null) {
+                    keyboardView?.showError("Speech recognition not ready")
+                    keyboardView?.showReadyState()
+                    return@launch
+                }
 
-                if (result != null && result.text.isNotEmpty()) {
-                    // Process through full pipeline: hallucinations + smart formatting
-                    val rawText = result.text
-                    val processedText = textProcessor.process(rawText)
+                val config = appConfig ?: ConfigRepository(this@VoiceInputIME).load()
+                val sampleRate = config.audio.sampleRate
+                val maxChunkDurationSec = config.audio.maxChunkDurationSec
+                val overlapDurationSec = config.audio.overlapDurationSec
 
-                    // Log transformations for debugging
-                    if (rawText != processedText) {
-                        Log.i(TAG, "Text transformed: \"$rawText\" → \"$processedText\"")
-                    }
+                val processedText = LongTranscription.transcribeInChunks(
+                    whisperEngine = engine,
+                    textProcessor = textProcessor,
+                    audioData = audioData,
+                    sampleRate = sampleRate,
+                    maxChunkDurationSec = maxChunkDurationSec,
+                    overlapDurationSec = overlapDurationSec
+                ) { index, total ->
+                    keyboardView?.showStatus("Processing $index/$total")
+                }
 
-                    if (processedText.isEmpty() || !textProcessor.isValidUtterance(processedText)) {
-                        // Filtered text is empty or invalid
-                        keyboardView?.showError("No speech detected")
-                        Log.w(TAG, "⚠️ FILTERED OUT - Raw: \"$rawText\" | Processed: \"$processedText\" | Valid: ${textProcessor.isValidUtterance(processedText)}")
-                    } else {
-                        insertText(processedText)
-
-                        // Save to history
-                        val durationMs = System.currentTimeMillis() - recordingStartTime
-                        saveNoteToHistory(processedText, durationMs)
-
-                        keyboardView?.showSuccess("✓")
-                        Log.i(TAG, "✅ Inserted: \"$processedText\"")
-                    }
-                } else {
+                if (processedText.isEmpty() || !textProcessor.isValidUtterance(processedText)) {
                     keyboardView?.showError("No speech detected")
-                    Log.w(TAG, "Transcription returned empty")
+                    Log.w(TAG, "Transcription returned empty after chunking")
+                } else {
+                    insertText(processedText)
+
+                    // Save to history
+                    val durationMs = System.currentTimeMillis() - recordingStartTime
+                    saveNoteToHistory(processedText, durationMs)
+
+                    keyboardView?.showSuccess("OK")
+                    Log.i(TAG, "Inserted: \"$processedText\"")
                 }
                 
                 // Clear buffer

@@ -12,7 +12,10 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.voiceinput.core.AudioRecorder
+import com.voiceinput.core.LongTranscription
+import com.voiceinput.core.TextProcessor
 import com.voiceinput.core.WhisperEngine
+import com.voiceinput.config.ConfigRepository
 import com.voiceinput.data.Note
 import com.voiceinput.data.NotesRepository
 import kotlinx.coroutines.*
@@ -33,6 +36,7 @@ class RecorderActivity : AppCompatActivity() {
     private lateinit var repository: NotesRepository
     private var audioRecorder: AudioRecorder? = null
     private var whisperEngine: WhisperEngine? = null
+    private val textProcessor = TextProcessor()
 
     private lateinit var statusText: TextView
     private lateinit var timerText: TextView
@@ -513,12 +517,40 @@ class RecorderActivity : AppCompatActivity() {
 
                 // Transcribe the audio
                 if (recordedAudio.isNotEmpty()) {
-                    val result = whisperEngine?.transcribe(recordedAudio)
+                    val engine = whisperEngine
+                    if (engine == null) {
+                        runOnUiThread {
+                            statusText.text = "Speech recognition not ready"
+                            statusText.setTextColor(Color.parseColor("#e0e0e0"))
+                            updateRecordButtonAppearance(RecordingVisualState.READY)
+                            timerText.visibility = View.GONE
+                            setProcessingState(false)
+                        }
+                        return@launch
+                    }
+
+                    val config = ConfigRepository(this@RecorderActivity).load()
+                    val sampleRate = audioRecorder?.getAudioInfo()?.sampleRate ?: config.audio.sampleRate
+                    val maxChunkDurationSec = config.audio.maxChunkDurationSec
+                    val overlapDurationSec = config.audio.overlapDurationSec
+
+                    val processedText = LongTranscription.transcribeInChunks(
+                        whisperEngine = engine,
+                        textProcessor = textProcessor,
+                        audioData = recordedAudio,
+                        sampleRate = sampleRate,
+                        maxChunkDurationSec = maxChunkDurationSec,
+                        overlapDurationSec = overlapDurationSec
+                    ) { index, total ->
+                        runOnUiThread {
+                            statusText.text = "Processing $index/$total"
+                        }
+                    }
 
                     runOnUiThread {
-                        if (result != null && result.text.isNotEmpty()) {
-                            currentTranscription = result.text
-                            transcriptionText.text = result.text
+                        if (processedText.isNotEmpty()) {
+                            currentTranscription = processedText
+                            transcriptionText.text = processedText
                             transcriptionText.visibility = View.VISIBLE
                             statusText.text = "Recording complete"
                             statusText.setTextColor(Color.parseColor("#e0e0e0"))

@@ -166,7 +166,7 @@ class VoiceKeyboardView(
                 dpToPx(60),
                 dpToPx(60)
             ).apply {
-                marginEnd = dpToPx(12)
+                marginStart = dpToPx(12)
             }
 
             // Touch listener for press/release with haptic feedback
@@ -194,8 +194,6 @@ class VoiceKeyboardView(
                 }
             }
         }
-        recordingArea.addView(microphoneButton)
-        applyMicrophoneVisualState(MicrophoneVisualState.READY)
 
         // Audio visualizer (waveform display during recording)
         audioVisualizer = AudioVisualizerView(context).apply {
@@ -208,7 +206,6 @@ class VoiceKeyboardView(
             // Set initial sensitivity from preferences
             sensitivity = preferencesManager.visualizerSensitivity
         }
-        recordingArea.addView(audioVisualizer)
 
         cancelIcon = TextView(context).apply {
             text = "✕"
@@ -222,14 +219,17 @@ class VoiceKeyboardView(
                 dpToPx(36),
                 dpToPx(36)
             ).apply {
-                marginStart = dpToPx(8)
+                marginEnd = dpToPx(8)
             }
             setOnClickListener {
                 onCancelPressed?.invoke()
             }
         }
-        recordingArea.addView(cancelIcon)
 
+        recordingArea.addView(audioVisualizer)
+        recordingArea.addView(cancelIcon)
+        recordingArea.addView(microphoneButton)
+        applyMicrophoneVisualState(MicrophoneVisualState.READY)
         mainKeyboardLayout.addView(recordingArea)
 
         // Instruction text - mode selection
