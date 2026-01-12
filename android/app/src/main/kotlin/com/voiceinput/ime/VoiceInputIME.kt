@@ -9,13 +9,12 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.LifecycleRegistry
 import com.voiceinput.core.AudioRecorder
-import com.voiceinput.core.LongTranscription
+import com.voiceinput.core.VoiceInputPipeline
 import com.voiceinput.core.WhisperEngine
 import com.voiceinput.core.TextProcessor
 import com.voiceinput.config.ConfigRepository
 import com.voiceinput.config.PreferencesManager
 import com.voiceinput.config.InputMode
-import com.voiceinput.config.AppConfig
 import com.voiceinput.data.Note
 import com.voiceinput.data.NotesRepository
 import com.voiceinput.SettingsActivity
@@ -24,8 +23,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import android.util.Log
 
 /**
@@ -50,7 +47,6 @@ class VoiceInputIME : InputMethodService(), LifecycleOwner {
     companion object {
         private const val TAG = "VoiceInputIME"
         private const val MAX_RECORDING_DURATION_MS = 7 * 60_000L  // 7 minutes max
-        private const val MAX_BUFFER_SIZE_BYTES = 32 * 1024 * 1024  // 32 MB max
         private const val WARNING_DURATION_MS = MAX_RECORDING_DURATION_MS - 30_000L  // Warn in last 30 seconds
     }
 
@@ -65,6 +61,7 @@ class VoiceInputIME : InputMethodService(), LifecycleOwner {
     private var audioRecorder: AudioRecorder? = null
     private var whisperEngine: WhisperEngine? = null
     private val textProcessor = TextProcessor()  // For filtering hallucinations + smart formatting
+    private var voicePipeline: VoiceInputPipeline? = null
 
     // Configuration
     private lateinit var preferencesManager: PreferencesManager
@@ -77,12 +74,7 @@ class VoiceInputIME : InputMethodService(), LifecycleOwner {
     private var isInitialized = false
     private var isRecording = false
     private var isTapMode = true  // Will be loaded from preferences
-    private var appConfig: AppConfig? = null
 
-    // Thread-safe audio buffer with size limits
-    private val audioBufferMutex = kotlinx.coroutines.sync.Mutex()
-    private val audioBuffer = mutableListOf<ByteArray>()
-    private var recordingJob: kotlinx.coroutines.Job? = null
     private var recordingStartTime: Long = 0
     private var timerJob: kotlinx.coroutines.Job? = null  // For duration display
 
@@ -184,8 +176,8 @@ class VoiceInputIME : InputMethodService(), LifecycleOwner {
             try {
                 keyboardView?.showStatus("Initializing voice recognition...")
                 keyboardView?.setMicrophoneEnabled(false)
-                
-                // ✅ FIX: Show animated loading
+
+                // Show animated loading
                 var dots = 0
                 val loadingJob = serviceScope.launch {
                     while (true) {
@@ -195,10 +187,9 @@ class VoiceInputIME : InputMethodService(), LifecycleOwner {
                         keyboardView?.showStatus("Initializing$dotsStr")
                     }
                 }
-                
+
                 val config = ConfigRepository(this@VoiceInputIME).load()
-                appConfig = config
-                
+
                 // Initialize audio recorder
                 audioRecorder = AudioRecorder(
                     sampleRate = config.audio.sampleRate,
@@ -207,7 +198,7 @@ class VoiceInputIME : InputMethodService(), LifecycleOwner {
                 ).apply {
                     initialize()
                 }
-                
+
                 // Initialize Whisper engine (heavy - do in background)
                 whisperEngine = WhisperEngine(
                     context = this@VoiceInputIME,
@@ -215,24 +206,32 @@ class VoiceInputIME : InputMethodService(), LifecycleOwner {
                 ).apply {
                     initializeFromAssets("models/")
                 }
-                
-                // Stop loading animation
+
+                // Initialize voice pipeline with VAD-based segmentation
+                voicePipeline = VoiceInputPipeline(
+                    context = this@VoiceInputIME,
+                    audioRecorder = audioRecorder!!,
+                    whisperEngine = whisperEngine!!,
+                    config = config,
+                    onResult = null,
+                    onAudioChunk = { chunk -> keyboardView?.updateAudioLevel(chunk) }
+                )
+                voicePipeline?.setSmartFormattingEnabled(preferencesManager.smartFormattingEnabled)
+
                 loadingJob.cancel()
-                
+
                 isInitialized = true
                 keyboardView?.showStatus("Ready to speak!")
                 keyboardView?.setMicrophoneEnabled(true)
-                
-                Log.i(TAG, "✅ Voice components initialized successfully")
-                
+
+                Log.i(TAG, "Voice components initialized successfully")
             } catch (e: Exception) {
-                Log.e(TAG, "❌ Failed to initialize voice components", e)
+                Log.e(TAG, "Failed to initialize voice components", e)
                 keyboardView?.showError("Initialization failed: ${e.message}")
                 isInitialized = false
             }
         }
     }
-
     /**
      * Clean up resources to prevent memory leaks
      */
@@ -240,17 +239,14 @@ class VoiceInputIME : InputMethodService(), LifecycleOwner {
         Log.d(TAG, "Cleaning up resources")
         
         try {
-            audioRecorder?.stop()
-            audioRecorder?.release()
-            // Note: WhisperEngine doesn't have release() method yet
-            // whisperEngine?.release()
+            voicePipeline?.release()
         } catch (e: Exception) {
             Log.e(TAG, "Error during cleanup", e)
         }
-        
+
+        voicePipeline = null
         whisperEngine = null
         audioRecorder = null
-        audioBuffer.clear()
         isInitialized = false
     }
 
@@ -348,10 +344,9 @@ class VoiceInputIME : InputMethodService(), LifecycleOwner {
     private fun startRecording() {
         Log.i(TAG, "Starting recording")
 
-        // Validate audio recorder is ready
-        val recorder = audioRecorder
-        if (recorder == null) {
-            keyboardView?.showError("Audio not initialized")
+        val pipeline = voicePipeline
+        if (pipeline == null) {
+            keyboardView?.showError("Voice pipeline not ready")
             return
         }
 
@@ -362,143 +357,61 @@ class VoiceInputIME : InputMethodService(), LifecycleOwner {
 
         serviceScope.launch {
             try {
-                // Clear previous audio safely
-                audioBufferMutex.withLock {
-                    audioBuffer.clear()
-                }
-                
-                // Start audio recording
-                if (!recorder.start()) {
-                    throw Exception("Failed to start AudioRecorder")
-                }
-                
-                // ✅ Start duration timer display
+                pipeline.startListening()
+
+                // Start duration timer display
                 timerJob = serviceScope.launch {
                     while (isRecording) {
-                        val elapsed = (System.currentTimeMillis() - recordingStartTime) / 1000
-                        val remaining = (MAX_RECORDING_DURATION_MS / 1000) - elapsed
+                        val elapsedMs = System.currentTimeMillis() - recordingStartTime
+                        val elapsed = elapsedMs / 1000
+                        val remaining = (MAX_RECORDING_DURATION_MS - elapsedMs) / 1000
 
-                        if (elapsed >= (WARNING_DURATION_MS / 1000)) {
-                            // Show warning in last 30 seconds
-                            keyboardView?.showStatus("Recording • ${remaining}s left")
+                        if (elapsedMs >= MAX_RECORDING_DURATION_MS) {
+                            Log.w(TAG, "Maximum recording duration reached (7m)")
+                            keyboardView?.showError("Max duration reached (7m)")
+                            stopRecording()
+                            break
+                        } else if (elapsedMs >= WARNING_DURATION_MS) {
+                            keyboardView?.showStatus("Recording... ${remaining}s left")
                         } else {
-                            // Show elapsed time
-                            keyboardView?.showStatus("Recording • ${elapsed}s")
+                            keyboardView?.showStatus("Recording... ${elapsed}s")
                         }
 
                         kotlinx.coroutines.delay(1000)
                     }
                 }
-                
-                // Collect audio chunks in background with safety checks
-                recordingJob = serviceScope.launch {
-                    try {
-                        recorder.audioStream().collect { chunk ->
-                            // Check recording limits
-                            val elapsed = System.currentTimeMillis() - recordingStartTime
-
-                            if (elapsed > MAX_RECORDING_DURATION_MS) {
-                                Log.w(TAG, "Maximum recording duration reached (7m)")
-                                keyboardView?.showError("Max duration reached (7m)")
-                                stopRecording()
-                                return@collect
-                            }
-
-                            // Thread-safe buffer access with size limit
-                            audioBufferMutex.withLock {
-                                if (isRecording) {
-                                    val currentSize = audioBuffer.sumOf { it.size }
-                                    if (currentSize + chunk.size > MAX_BUFFER_SIZE_BYTES) {
-                                        Log.w(TAG, "Maximum buffer size reached (32MB)")
-                                        stopRecording()
-                                        return@collect
-                                    }
-                                    audioBuffer.add(chunk)
-
-                                    // Update visualizer with audio data
-                                    keyboardView?.updateAudioLevel(chunk)
-                                }
-                            }
-                        }
-                    } catch (e: Exception) {
-                        // JobCancellationException is normal when stopping - not an error
-                        if (e is kotlinx.coroutines.CancellationException) {
-                            Log.d(TAG, "Audio collection cancelled (normal)")
-                        } else {
-                            Log.e(TAG, "Error collecting audio", e)
-                            serviceScope.launch {
-                                keyboardView?.showError("Recording error")
-                                isRecording = false
-                            }
-                        }
-                    }
-                }
-                
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to start recording", e)
                 keyboardView?.showError("Can't start recording")
                 isRecording = false
-                audioBufferMutex.withLock {
-                    audioBuffer.clear()
-                }
             }
         }
     }
-
     private fun stopRecording() {
         serviceScope.launch {
             try {
                 Log.i(TAG, "Stopping recording")
                 isRecording = false
-                
+
                 keyboardView?.showProcessingState()
-                
-                // Stop audio recording and timer
-                audioRecorder?.stop()
-                recordingJob?.cancel()
+
+                // Stop timer
                 timerJob?.cancel()
-                
-                // Small delay to ensure last chunks are collected
-                kotlinx.coroutines.delay(100)
-                
-                // Get recorded audio
-                val audioData = combineAudioChunks()
-                
-                if (audioData.isEmpty()) {
-                    Log.w(TAG, "No audio data collected")
-                    keyboardView?.showError("No audio recorded")
-                    keyboardView?.showReadyState()
-                    return@launch
-                }
-                
-                Log.i(TAG, "Transcribing ${audioData.size} bytes of audio (${audioBuffer.size} chunks)")
-                
-                val engine = whisperEngine
-                if (engine == null) {
+
+                val pipeline = voicePipeline
+                if (pipeline == null) {
                     keyboardView?.showError("Speech recognition not ready")
                     keyboardView?.showReadyState()
                     return@launch
                 }
 
-                val config = appConfig ?: ConfigRepository(this@VoiceInputIME).load()
-                val sampleRate = config.audio.sampleRate
-                val maxChunkDurationSec = config.audio.maxChunkDurationSec
-                val overlapDurationSec = config.audio.overlapDurationSec
+                val processedText = pipeline.stopListening()
+                pipeline.clearText()
 
-                val processedText = LongTranscription.transcribeInChunks(
-                    whisperEngine = engine,
-                    textProcessor = textProcessor,
-                    audioData = audioData,
-                    sampleRate = sampleRate,
-                    maxChunkDurationSec = maxChunkDurationSec,
-                    overlapDurationSec = overlapDurationSec
-                ) { index, total ->
-                    keyboardView?.showStatus("Processing $index/$total")
-                }
 
                 if (processedText.isEmpty() || !textProcessor.isValidUtterance(processedText)) {
                     keyboardView?.showError("No speech detected")
-                    Log.w(TAG, "Transcription returned empty after chunking")
+                    Log.w(TAG, "Transcription returned empty after VAD chunking")
                 } else {
                     insertText(processedText)
 
@@ -509,67 +422,30 @@ class VoiceInputIME : InputMethodService(), LifecycleOwner {
                     keyboardView?.showSuccess("OK")
                     Log.i(TAG, "Inserted: \"$processedText\"")
                 }
-                
-                // Clear buffer
-                audioBuffer.clear()
+
                 keyboardView?.showReadyState()
-                
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to stop recording", e)
                 keyboardView?.showError("Error: ${e.message}")
-                audioBuffer.clear()
                 keyboardView?.showReadyState()
             }
         }
     }
-
     private fun cancelRecording() {
         serviceScope.launch {
             Log.i(TAG, "Cancelling recording")
-            
-        try {
-            audioRecorder?.stop()
-            recordingJob?.cancel()
-            timerJob?.cancel()
-            isRecording = false
-            
-            // Clear buffer safely
-            audioBufferMutex.withLock {
-                audioBuffer.clear()
-            }
-            
-            keyboardView?.showReadyState()
-            keyboardView?.showTemporaryStatus("Cancelled", 5000L)
-        } catch (e: Exception) {
-            Log.e(TAG, "Error cancelling recording", e)
-        }
-        }
-    }
 
-    /**
-     * Combine all buffered audio chunks into a single ByteArray
-     * Thread-safe access to audio buffer
-     */
-    private suspend fun combineAudioChunks(): ByteArray {
-        return audioBufferMutex.withLock {
-            if (audioBuffer.isEmpty()) {
-                return@withLock ByteArray(0)
+            try {
+                isRecording = false
+                timerJob?.cancel()
+                voicePipeline?.stopListening()
+                voicePipeline?.clearText()
+
+                keyboardView?.showReadyState()
+                keyboardView?.showTemporaryStatus("Cancelled", 5000L)
+            } catch (e: Exception) {
+                Log.e(TAG, "Error cancelling recording", e)
             }
-            
-            // Calculate total size
-            val totalSize = audioBuffer.sumOf { it.size }
-            
-            // Combine all chunks
-            val combined = ByteArray(totalSize)
-            var offset = 0
-            
-            for (chunk in audioBuffer) {
-                chunk.copyInto(combined, offset)
-                offset += chunk.size
-            }
-            
-            Log.d(TAG, "Combined ${audioBuffer.size} chunks into ${combined.size} bytes")
-            return@withLock combined
         }
     }
 

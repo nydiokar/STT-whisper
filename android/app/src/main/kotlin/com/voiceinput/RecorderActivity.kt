@@ -12,8 +12,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.voiceinput.core.AudioRecorder
-import com.voiceinput.core.LongTranscription
-import com.voiceinput.core.TextProcessor
+import com.voiceinput.core.VoiceInputPipeline
 import com.voiceinput.core.WhisperEngine
 import com.voiceinput.config.ConfigRepository
 import com.voiceinput.data.Note
@@ -36,7 +35,7 @@ class RecorderActivity : AppCompatActivity() {
     private lateinit var repository: NotesRepository
     private var audioRecorder: AudioRecorder? = null
     private var whisperEngine: WhisperEngine? = null
-    private val textProcessor = TextProcessor()
+    private var voicePipeline: VoiceInputPipeline? = null
 
     private lateinit var statusText: TextView
     private lateinit var timerText: TextView
@@ -93,6 +92,14 @@ class RecorderActivity : AppCompatActivity() {
                 val initSuccess = whisperEngine?.initialize() ?: false
 
                 if (initSuccess) {
+                    val config = ConfigRepository(this@RecorderActivity).load()
+                    voicePipeline = VoiceInputPipeline(
+                        context = this@RecorderActivity,
+                        audioRecorder = audioRecorder!!,
+                        whisperEngine = whisperEngine!!,
+                        config = config,
+                        onResult = null
+                    )
                     Log.i(TAG, "Components initialized successfully")
                 } else {
                     Log.e(TAG, "Failed to initialize Whisper engine")
@@ -517,8 +524,8 @@ class RecorderActivity : AppCompatActivity() {
 
                 // Transcribe the audio
                 if (recordedAudio.isNotEmpty()) {
-                    val engine = whisperEngine
-                    if (engine == null) {
+                    val pipeline = voicePipeline
+                    if (pipeline == null) {
                         runOnUiThread {
                             statusText.text = "Speech recognition not ready"
                             statusText.setTextColor(Color.parseColor("#e0e0e0"))
@@ -529,23 +536,9 @@ class RecorderActivity : AppCompatActivity() {
                         return@launch
                     }
 
-                    val config = ConfigRepository(this@RecorderActivity).load()
-                    val sampleRate = audioRecorder?.getAudioInfo()?.sampleRate ?: config.audio.sampleRate
-                    val maxChunkDurationSec = config.audio.maxChunkDurationSec
-                    val overlapDurationSec = config.audio.overlapDurationSec
-
-                    val processedText = LongTranscription.transcribeInChunks(
-                        whisperEngine = engine,
-                        textProcessor = textProcessor,
-                        audioData = recordedAudio,
-                        sampleRate = sampleRate,
-                        maxChunkDurationSec = maxChunkDurationSec,
-                        overlapDurationSec = overlapDurationSec
-                    ) { index, total ->
-                        runOnUiThread {
-                            statusText.text = "Processing $index/$total"
-                        }
-                    }
+                    pipeline.clearText()
+                    pipeline.feedFileAudio(recordedAudio)
+                    val processedText = pipeline.getFinalText()
 
                     runOnUiThread {
                         if (processedText.isNotEmpty()) {
@@ -557,6 +550,15 @@ class RecorderActivity : AppCompatActivity() {
                             bottomBar.visibility = View.VISIBLE
                             timerText.setTextColor(Color.parseColor("#e0e0e0"))
                         } else {
+                            statusText.text = "No speech detected"
+                            statusText.setTextColor(Color.parseColor("#e0e0e0"))
+                            timerText.visibility = View.GONE
+                        }
+
+                        updateRecordButtonAppearance(RecordingVisualState.READY)
+                        setProcessingState(false)
+                    }
+                } else {
                             statusText.text = "No speech detected"
                             statusText.setTextColor(Color.parseColor("#e0e0e0"))
                             timerText.visibility = View.GONE
@@ -655,8 +657,10 @@ class RecorderActivity : AppCompatActivity() {
         if (isRecording) {
             audioRecorder?.stop()
         }
-        audioRecorder?.release()
-        whisperEngine?.release()
+        voicePipeline?.release()
+        voicePipeline = null
+        audioRecorder = null
+        whisperEngine = null
         timerJob?.cancel()
         scope.cancel()
     }

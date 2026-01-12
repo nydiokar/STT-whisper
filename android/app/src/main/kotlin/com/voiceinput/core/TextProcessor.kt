@@ -563,6 +563,26 @@ class TextProcessor(
     }
 
     /**
+     * Process accumulated text at the end of a recording.
+     * Intended to run after per-chunk filtering has already happened.
+     */
+    fun processFinal(rawText: String): String {
+        if (rawText.isEmpty()) return ""
+
+        // Remove timestamps and trim once at the end
+        var text = removeTimestamps(rawText).trim()
+        if (text.isEmpty()) return ""
+
+        // Apply custom vocabulary (personal corrections)
+        text = applyCustomVocabulary(text)
+
+        // Format structured data (emails, URLs)
+        text = formatStructuredData(text)
+
+        return text
+    }
+
+    /**
      * Toggle smart formatting on/off at runtime.
      */
     fun setSmartFormattingEnabled(enabled: Boolean) {

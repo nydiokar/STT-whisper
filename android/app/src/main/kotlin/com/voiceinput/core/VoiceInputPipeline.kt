@@ -21,7 +21,8 @@ class VoiceInputPipeline(
     private val audioRecorder: AudioRecorder,
     private val whisperEngine: WhisperEngine,
     private val config: AppConfig,
-    private val onResult: ((TranscriptionResult) -> Unit)? = null
+    private val onResult: ((TranscriptionResult) -> Unit)? = null,
+    private val onAudioChunk: ((ByteArray) -> Unit)? = null
 ) {
 
     companion object {
@@ -204,11 +205,11 @@ class VoiceInputPipeline(
 
     /**
      * Stop listening and transcribing with memory cleanup
-     * @return Final accumulated text
+     * @return Final processed text
      */
     suspend fun stopListening(): String {
         if (!isRunning.getAndSet(false)) {
-            return accumulatedText
+            return getFinalText()
         }
 
         memoryManager.logMemoryStatusImmediate("Before pipeline stop")
@@ -224,7 +225,7 @@ class VoiceInputPipeline(
         memoryManager.logMemoryStatus("After audio recorder stop")
 
         // Text is already accumulated, no additional processing needed
-        val finalText = accumulatedText
+        val finalText = getFinalText()
 
         // Performance summary
         val avgProcessingTime = if (transcriptionCount > 0) totalProcessingTime / transcriptionCount else 0L
@@ -246,6 +247,7 @@ class VoiceInputPipeline(
             .buffer(capacity = 5) // Reduced buffer for lower latency
             .collect { audioChunk ->
                 try {
+                    onAudioChunk?.invoke(audioChunk)
                     // Feed audio chunk to processor (which handles VAD and transcription)
                     audioProcessor.addAudio(audioChunk)
                 } catch (e: Exception) {
@@ -342,10 +344,22 @@ class VoiceInputPipeline(
     fun getText(): String = accumulatedText
 
     /**
+     * Get fully processed final text
+     */
+    fun getFinalText(): String = textProcessor.processFinal(accumulatedText)
+
+    /**
      * Set callback for transcription updates
      */
     fun setTranscriptionUpdateCallback(callback: (String) -> Unit) {
         onTranscriptionUpdate = callback
+    }
+
+    /**
+     * Update smart formatting at runtime
+     */
+    fun setSmartFormattingEnabled(enabled: Boolean) {
+        textProcessor.setSmartFormattingEnabled(enabled)
     }
 
     /**
