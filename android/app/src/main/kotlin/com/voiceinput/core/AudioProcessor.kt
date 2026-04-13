@@ -6,6 +6,7 @@ import com.voiceinput.config.AppConfig
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.*
+import kotlin.math.max
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
@@ -49,7 +50,9 @@ class AudioProcessor(
 
     // Removed streaming chunk logic - now matches desktop behavior exactly
     private var maxChunkDurationSec: Float = config.audio.maxChunkDurationSec
+    private var overlapDurationSec: Float = config.audio.overlapDurationSec
     private var maxChunkBytes: Int = 0
+    private var overlapBytes: Int = 0
     private var minChunkSizeBytes: Int = config.transcription.minChunkSizeBytes
 
     // Processing state
@@ -132,10 +135,12 @@ class AudioProcessor(
         silenceDurationSec = config.audio.silenceDurationSec
         enableVAD = config.audio.enableVAD
         maxChunkDurationSec = config.audio.maxChunkDurationSec
+        overlapDurationSec = config.audio.overlapDurationSec
         maxChunkBytes = (maxChunkDurationSec * sampleRate * 2).toInt()
+        overlapBytes = (overlapDurationSec * sampleRate * 2).toInt().coerceAtMost(maxChunkBytes / 2)
         minChunkSizeBytes = config.transcription.minChunkSizeBytes
 
-        Log.i(TAG, "Config updated: VAD=${if (enableVAD) "on" else "off"}, SilenceDur=${silenceDurationSec}s, MaxChunk=${maxChunkDurationSec}s (${maxChunkBytes} bytes)")
+        Log.i(TAG, "Config updated: VAD=${if (enableVAD) "on" else "off"}, SilenceDur=${silenceDurationSec}s, MaxChunk=${maxChunkDurationSec}s (${maxChunkBytes} bytes), Overlap=${overlapDurationSec}s (${overlapBytes} bytes)")
     }
 
     /**
@@ -340,8 +345,8 @@ class AudioProcessor(
                 if (newState.activeSpeechBuffer.size >= maxChunkBytes) {
                     // PERFORMANCE: Reduced logging - only log when processing
                     Log.i(TAG, "Processing chunk: ${newState.activeSpeechBuffer.size} bytes (max size)")
-                    processAudioBuffer(newState.activeSpeechBuffer)
-                    newState.cleared()
+                    processAudioBuffer(newState.activeSpeechBuffer.copyOfRange(0, maxChunkBytes))
+                    retainOverlapWindow(newState, maxChunkBytes)
                 } else {
                     newState
                 }
@@ -360,8 +365,8 @@ class AudioProcessor(
                     // Process if silence makes buffer exceed max size (matching desktop logic)
                     if (newState.activeSpeechBuffer.size >= maxChunkBytes) {
                         Log.i(TAG, "Processing chunk: ${newState.activeSpeechBuffer.size} bytes (max size silence)")
-                        processAudioBuffer(newState.activeSpeechBuffer)
-                        newState.cleared()
+                        processAudioBuffer(newState.activeSpeechBuffer.copyOfRange(0, maxChunkBytes))
+                        retainOverlapWindow(newState, maxChunkBytes)
                     } else {
                         newState
                     }
@@ -373,6 +378,29 @@ class AudioProcessor(
             Log.e(TAG, "Error processing audio chunk: ${e.message}", e)
             return currentState.cleared() // Clear buffer on error to prevent reprocessing bad data
         }
+    }
+
+    private fun retainOverlapWindow(state: BufferState, processedBytes: Int): BufferState {
+        val buffer = state.activeSpeechBuffer
+        if (buffer.isEmpty()) {
+            return state.cleared()
+        }
+
+        val overlapStart = if (overlapBytes > 0) {
+            max(0, processedBytes - overlapBytes)
+        } else {
+            processedBytes
+        }
+        val retained = if (overlapStart < buffer.size) {
+            buffer.copyOfRange(overlapStart, buffer.size)
+        } else {
+            ByteArray(0)
+        }
+
+        return state.copy(
+            activeSpeechBuffer = retained,
+            totalProcessedBytes = retained.size
+        )
     }
 
     /**

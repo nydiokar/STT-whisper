@@ -11,8 +11,8 @@ android {
         applicationId = "com.voiceinput"
         minSdk = 26  // Android 8.0 (required by whisperlib)
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "1.1.0-stitching"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

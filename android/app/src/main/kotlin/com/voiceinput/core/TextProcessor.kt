@@ -22,7 +22,7 @@ class TextProcessor(
 
     companion object {
         // Maximum overlap length to prevent excessive searching
-        private const val MAX_OVERLAP = 30
+        private const val MAX_OVERLAP = 80
 
         // Regular expression for matching timestamp patterns from whisper.cpp
         // Pattern: [00:00:00.000 --> 00:00:05.000]
@@ -297,8 +297,8 @@ class TextProcessor(
     fun appendText(accumulated: String, newText: String): String {
         if (newText.isEmpty()) return accumulated
 
-        // Clean the new text - just strip it
-        val formattedNewText = newText.trim()
+        // Normalize only boundary artifacts; avoid reformatting the whole chunk aggressively.
+        val formattedNewText = normalizeChunkBoundaryText(newText.trim())
 
         if (formattedNewText.isEmpty()) return accumulated
 
@@ -307,92 +307,102 @@ class TextProcessor(
             return formatTranscript(formattedNewText)
         }
 
-        // Simple overlap check (Whisper often repeats segments)
-        val accumulatedLower = accumulated.lowercase().trimEnd()
-        val newLower = formattedNewText.lowercase()
-        var bestOverlap = 0
-
-        // Start check from a reasonably small overlap to avoid false positives
-        for (overlap in minOf(accumulatedLower.length, newLower.length, MAX_OVERLAP) downTo 3) {
-            if (accumulatedLower.endsWith(newLower.take(overlap))) {
-                bestOverlap = overlap
-                break
-            }
+        val normalizedAccumulated = normalizeChunkBoundaryText(accumulated.trimEnd())
+        val overlapWords = findWordOverlap(normalizedAccumulated, formattedNewText)
+        val newChunkWithoutOverlap = dropLeadingWords(formattedNewText, overlapWords)
+        if (newChunkWithoutOverlap.isEmpty()) {
+            return normalizedAccumulated
         }
 
-        if (bestOverlap > 0) {
-            // Append only the non-overlapping part
-            val nonOverlappingPart = formattedNewText.substring(bestOverlap)
-            val nonOverlappingPartStripped = nonOverlappingPart.trim()
+        var result = normalizedAccumulated.trimEnd()
+        val appendPart = adaptChunkLeadingCase(result, newChunkWithoutOverlap)
+        val separator = determineChunkSeparator(result, appendPart)
+        return normalizeChunkBoundaryText("$result$separator$appendPart")
+    }
 
-            // Check if non-overlapping is just punctuation
-            if (nonOverlappingPartStripped.isNotEmpty() &&
-                nonOverlappingPartStripped.length <= 2 &&
-                nonOverlappingPartStripped.all { it in ".!?," }) {
-                // Check if accumulated already ends with this punctuation
-                if (accumulated.trimEnd().endsWith(nonOverlappingPartStripped)) {
-                    return accumulated.trimEnd()
-                }
-                // Handle specific case like adding '.' when ends with '..'
-                if (nonOverlappingPartStripped == "." && accumulated.trimEnd().endsWith("..")) {
-                    return accumulated.trimEnd()
-                }
-            }
+    private fun determineChunkSeparator(accumulated: String, newText: String): String {
+        val lastCharAcc = accumulated.lastOrNull() ?: return ""
+        val firstCharNew = newText.firstOrNull() ?: return ""
 
-            if (nonOverlappingPartStripped.isEmpty()) {
-                return accumulated.trimEnd()
-            }
+        if (lastCharAcc.isWhitespace() || firstCharNew.isWhitespace()) return ""
+        if (firstCharNew in ".,?!:;)]}") return ""
+        if (lastCharAcc in "([{\"'") return ""
 
-            // If there's a real non-overlapping part to add
-            var result = accumulated.trimEnd()
-            val lastCharAcc = result.lastOrNull() ?: ' '
-            val firstCharNew = nonOverlappingPartStripped.firstOrNull() ?: ' '
+        return if (lastCharAcc.isLetterOrDigit() && firstCharNew.isLetterOrDigit()) " " else " "
+    }
 
-            // Add space unless previous ends in space/newline or new part starts with punctuation
-            val separator = if (lastCharAcc in "\\n " || firstCharNew in ".,'?!") "" else " "
+    private fun adaptChunkLeadingCase(accumulated: String, newText: String): String {
+        if (newText.isEmpty()) return newText
 
-            // Capitalize if previous ended a sentence
-            val appendPart = if (lastCharAcc in ".!?") {
-                // Find first letter to capitalize
-                val firstLetterIndex = nonOverlappingPartStripped.indexOfFirst { it.isLetter() }
-                if (firstLetterIndex != -1) {
-                    nonOverlappingPartStripped.substring(0, firstLetterIndex) +
-                    nonOverlappingPartStripped[firstLetterIndex].uppercase() +
-                    nonOverlappingPartStripped.substring(firstLetterIndex + 1)
-                } else {
-                    nonOverlappingPartStripped
-                }
-            } else {
-                nonOverlappingPartStripped
-            }
+        val previousChar = accumulated.trimEnd().lastOrNull() ?: return newText
+        if (previousChar in ".!?") {
+            return newText
+        }
 
-            return "$result$separator$appendPart"
+        val firstWord = newText.takeWhile { !it.isWhitespace() }
+        if (firstWord.length < 2) {
+            return newText
+        }
+
+        val shouldLowercaseStarter =
+            firstWord.first().isUpperCase() &&
+            firstWord.getOrNull(1)?.isLowerCase() == true &&
+            firstWord.lowercase() in boundaryContinuationWords
+
+        return if (shouldLowercaseStarter) {
+            firstWord.replaceFirstChar { it.lowercase() } + newText.substring(firstWord.length)
         } else {
-            // No significant overlap found, append with formatting
-            var result = accumulated.trimEnd()
-            val lastCharAcc = result.lastOrNull() ?: ' '
-            val firstCharNew = formattedNewText.firstOrNull() ?: ' '
-
-            // Add space unless previous ends in space/newline or new part starts with punctuation
-            val separator = if (lastCharAcc in "\\n " || firstCharNew in ".,'?!") "" else " "
-
-            // Capitalize if accumulated is empty or ends with sentence-ending punctuation
-            val appendPart = if (result.isEmpty() || lastCharAcc in ".!?") {
-                // Find first letter to capitalize
-                val firstLetterIndex = formattedNewText.indexOfFirst { it.isLetter() }
-                if (firstLetterIndex != -1) {
-                    formattedNewText.substring(0, firstLetterIndex) +
-                    formattedNewText[firstLetterIndex].uppercase() +
-                    formattedNewText.substring(firstLetterIndex + 1)
-                } else {
-                    formattedNewText
-                }
-            } else {
-                formattedNewText
-            }
-
-            return "$result$separator$appendPart"
+            newText
         }
+    }
+
+    private fun findWordOverlap(accumulated: String, newText: String): Int {
+        val accumulatedWords = tokenizeForBoundaryMatch(accumulated)
+        val newWords = tokenizeForBoundaryMatch(newText)
+        val maxWords = minOf(accumulatedWords.size, newWords.size, 12)
+
+        for (overlap in maxWords downTo 2) {
+            if (accumulatedWords.takeLast(overlap) == newWords.take(overlap)) {
+                return overlap
+            }
+        }
+        return 0
+    }
+
+    private fun dropLeadingWords(text: String, wordsToDrop: Int): String {
+        if (wordsToDrop <= 0) return text.trim()
+
+        var index = 0
+        var dropped = 0
+        while (index < text.length && dropped < wordsToDrop) {
+            while (index < text.length && text[index].isWhitespace()) {
+                index++
+            }
+            while (index < text.length && !text[index].isWhitespace()) {
+                index++
+            }
+            dropped++
+        }
+        return text.substring(index).trimStart()
+    }
+
+    private fun tokenizeForBoundaryMatch(text: String): List<String> {
+        return text
+            .lowercase()
+            .replace(Regex("""[^\p{L}\p{N}'\s-]"""), " ")
+            .split(Regex("""\s+"""))
+            .filter { it.isNotEmpty() }
+            .takeLast(MAX_OVERLAP)
+    }
+
+    private fun normalizeChunkBoundaryText(text: String): String {
+        if (text.isEmpty()) return text
+
+        return text
+            .replace(Regex("""(?<=[a-z])(?=[A-Z])"""), " ")
+            .replace(Regex("""(?<=[.,!?])(?=[A-Za-z])"""), " ")
+            .replace(Regex("""\s+"""), " ")
+            .trim()
     }
 
     /**
@@ -570,7 +580,7 @@ class TextProcessor(
         if (rawText.isEmpty()) return ""
 
         // Remove timestamps and trim once at the end
-        var text = removeTimestamps(rawText).trim()
+        var text = normalizeChunkBoundaryText(removeTimestamps(rawText).trim())
         if (text.isEmpty()) return ""
 
         // Apply custom vocabulary (personal corrections)
@@ -581,6 +591,13 @@ class TextProcessor(
 
         return text
     }
+
+    private val boundaryContinuationWords = setOf(
+        "a", "an", "and", "are", "as", "at", "because", "but", "for", "if",
+        "in", "is", "it", "maybe", "of", "on", "or", "so", "that", "the",
+        "then", "there", "these", "this", "those", "to", "we", "when", "while",
+        "with", "you"
+    )
 
     /**
      * Toggle smart formatting on/off at runtime.

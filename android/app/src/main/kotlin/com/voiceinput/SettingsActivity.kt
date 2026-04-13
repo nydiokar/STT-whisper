@@ -37,6 +37,10 @@ class SettingsActivity : AppCompatActivity() {
     }
 
     private fun createSettingsLayout(): LinearLayout {
+        val packageInfo = packageManager.getPackageInfo(packageName, 0)
+        val installedVersionName = packageInfo.versionName ?: "unknown"
+        val installedVersionCode = packageInfo.longVersionCode
+
         return LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             layoutParams = LinearLayout.LayoutParams(
@@ -75,6 +79,7 @@ class SettingsActivity : AppCompatActivity() {
             addView(createInfoCard(
                 "⚙️ Current Settings",
                 """
+                Version: $installedVersionName ($installedVersionCode)
                 Model: Whisper Small INT8 (161 MB)
                 Language: ${config.transcription.language}
                 Max Duration: Manual stop
