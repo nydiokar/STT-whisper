@@ -465,26 +465,16 @@ class VoiceInputIME : InputMethodService(), LifecycleOwner {
         }
 
         try {
-            // Validate InputConnection is still alive
-            // getTextBeforeCursor with 0 length will fail if connection is stale
-            val testText = ic.getTextBeforeCursor(0, 0)
-            if (testText == null) {
-                Log.w(TAG, "InputConnection is stale/disconnected")
-                keyboardView?.showError("Connection lost")
-                return
+            ic.beginBatchEdit()
+
+            try {
+                ic.commitText(text, 1)
+            } finally {
+                ic.endBatchEdit()
             }
 
-            // Use batch edit for better performance
-            ic.beginBatchEdit()
-            
-            // Insert the text at cursor position
-            // newCursorPosition=1 means move cursor to end of inserted text
-            ic.commitText(text, 1)
-            
-            ic.endBatchEdit()
-            
-            Log.i(TAG, "✅ Text inserted successfully: \"$text\"")
-            
+            Log.i(TAG, "Text inserted successfully: \"$text\"")
+
         } catch (e: Exception) {
             Log.e(TAG, "Failed to insert text", e)
             keyboardView?.showError("Insert failed")

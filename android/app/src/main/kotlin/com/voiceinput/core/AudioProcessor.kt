@@ -45,6 +45,7 @@ class AudioProcessor(
     private var minAudioLengthBytes: Int = 0
     private var sampleRate: Int = config.audio.sampleRate
     private var silenceDurationSec: Float = config.audio.silenceDurationSec
+    private var enableVAD: Boolean = config.audio.enableVAD
 
     // Removed streaming chunk logic - now matches desktop behavior exactly
     private var maxChunkDurationSec: Float = config.audio.maxChunkDurationSec
@@ -129,11 +130,12 @@ class AudioProcessor(
     private fun updateConfigurationValues() {
         minAudioLengthBytes = (config.audio.minAudioLengthSec * sampleRate * 2).toInt() // Convert seconds to bytes
         silenceDurationSec = config.audio.silenceDurationSec
+        enableVAD = config.audio.enableVAD
         maxChunkDurationSec = config.audio.maxChunkDurationSec
         maxChunkBytes = (maxChunkDurationSec * sampleRate * 2).toInt()
         minChunkSizeBytes = config.transcription.minChunkSizeBytes
 
-        Log.i(TAG, "🔧 Config updated: SilenceDur=${silenceDurationSec}s, MaxChunk=${maxChunkDurationSec}s (${maxChunkBytes} bytes)")
+        Log.i(TAG, "Config updated: VAD=${if (enableVAD) "on" else "off"}, SilenceDur=${silenceDurationSec}s, MaxChunk=${maxChunkDurationSec}s (${maxChunkBytes} bytes)")
     }
 
     /**
@@ -156,7 +158,7 @@ class AudioProcessor(
         }
 
         // Initialize VAD first (if not already done)
-        if (sileroVAD?.isInitialized() != true) {
+        if (enableVAD && sileroVAD?.isInitialized() != true) {
             Log.i(TAG, "VAD not ready, initializing now...")
             initializeVAD()
         }
@@ -222,6 +224,10 @@ class AudioProcessor(
      * - Accurate speech detection across arbitrary chunk sizes
      */
     suspend fun isSilent(audioData: ByteArray): Boolean {
+        if (!enableVAD) {
+            return false
+        }
+
         val vad = sileroVAD
         if (vad?.isInitialized() != true) {
             Log.w(TAG, "VAD not initialized, assuming speech")
