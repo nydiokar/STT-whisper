@@ -559,15 +559,6 @@ class RecorderActivity : AppCompatActivity() {
                         setProcessingState(false)
                     }
                 } else {
-                            statusText.text = "No speech detected"
-                            statusText.setTextColor(Color.parseColor("#e0e0e0"))
-                            timerText.visibility = View.GONE
-                        }
-
-                        updateRecordButtonAppearance(RecordingVisualState.READY)
-                        setProcessingState(false)
-                    }
-                } else {
                     runOnUiThread {
                         statusText.text = "No audio recorded"
                         statusText.setTextColor(Color.parseColor("#e0e0e0"))
@@ -657,7 +648,12 @@ class RecorderActivity : AppCompatActivity() {
         if (isRecording) {
             audioRecorder?.stop()
         }
-        voicePipeline?.release()
+        val pipeline = voicePipeline
+        if (pipeline != null) {
+            runBlocking {
+                pipeline.release()
+            }
+        }
         voicePipeline = null
         audioRecorder = null
         whisperEngine = null

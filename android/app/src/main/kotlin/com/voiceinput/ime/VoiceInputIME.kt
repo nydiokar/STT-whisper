@@ -23,6 +23,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import android.util.Log
 
 /**
@@ -46,8 +47,6 @@ class VoiceInputIME : InputMethodService(), LifecycleOwner {
 
     companion object {
         private const val TAG = "VoiceInputIME"
-        private const val MAX_RECORDING_DURATION_MS = 7 * 60_000L  // 7 minutes max
-        private const val WARNING_DURATION_MS = MAX_RECORDING_DURATION_MS - 30_000L  // Warn in last 30 seconds
     }
 
     // Lifecycle management for coroutines
@@ -237,9 +236,14 @@ class VoiceInputIME : InputMethodService(), LifecycleOwner {
      */
     private fun cleanup() {
         Log.d(TAG, "Cleaning up resources")
-        
+
+        val pipeline = voicePipeline
         try {
-            voicePipeline?.release()
+            if (pipeline != null) {
+                runBlocking {
+                    pipeline.release()
+                }
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Error during cleanup", e)
         }
@@ -364,18 +368,7 @@ class VoiceInputIME : InputMethodService(), LifecycleOwner {
                     while (isRecording) {
                         val elapsedMs = System.currentTimeMillis() - recordingStartTime
                         val elapsed = elapsedMs / 1000
-                        val remaining = (MAX_RECORDING_DURATION_MS - elapsedMs) / 1000
-
-                        if (elapsedMs >= MAX_RECORDING_DURATION_MS) {
-                            Log.w(TAG, "Maximum recording duration reached (7m)")
-                            keyboardView?.showError("Max duration reached (7m)")
-                            stopRecording()
-                            break
-                        } else if (elapsedMs >= WARNING_DURATION_MS) {
-                            keyboardView?.showStatus("Recording... ${remaining}s left")
-                        } else {
-                            keyboardView?.showStatus("Recording... ${elapsed}s")
-                        }
+                        keyboardView?.showStatus("Recording... ${elapsed}s")
 
                         kotlinx.coroutines.delay(1000)
                     }

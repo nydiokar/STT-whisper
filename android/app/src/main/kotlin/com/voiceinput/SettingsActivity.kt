@@ -77,7 +77,7 @@ class SettingsActivity : AppCompatActivity() {
                 """
                 Model: Whisper Small INT8 (161 MB)
                 Language: ${config.transcription.language}
-                Max Duration: 7 minutes
+                Max Duration: Manual stop
                 Sample Rate: ${config.audio.sampleRate} Hz
                 VAD Threshold: ${config.audio.vadThreshold}
                 Acceleration: APU/NNAPI + CPU fallback
